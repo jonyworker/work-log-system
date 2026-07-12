@@ -29,7 +29,7 @@ const {
   selectedDateBaseStatus,
   changeWeek,
   selectDate,
-} = useCalendar('2026-07-08')
+} = useCalendar()
 
 const workLogStore = useWorkLogStore()
 const dayStatusStore = useDayStatusStore()
