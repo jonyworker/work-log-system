@@ -41,6 +41,7 @@ const {
   isSaving: isSavingWorkLog,
   loadError: workLogLoadError,
   saveError: workLogSaveError,
+  compTimeSummary,
 } = storeToRefs(workLogStore)
 
 const {
@@ -60,10 +61,10 @@ const dayStatusOptions = [
     value: 'none',
     label: '無',
   },
-  {
-    value: 'annualLeave',
-    label: '特休',
-  },
+  { value: 'annualLeave', label: '特休' },
+  { value: 'compLeave', label: '補休' },
+  { value: 'personalLeave', label: '事假' },
+  { value: 'sickLeave', label: '病假' },
   {
     value: 'makeupWork',
     label: '補班',
@@ -82,20 +83,31 @@ const selectedDateLogs = computed(() =>
 
 const selectedDayStatusOverride = computed({
   get() {
-    return (
-      dayStatusStore.getStatusByDate(
-        selectedDate.value
-      )?.status ?? 'none'
-    )
+    return dayStatusStore.getStatusByDate(selectedDate.value)?.status ?? 'none'
   },
-
   set(status) {
-    void dayStatusStore.setStatus(
-      selectedDate.value,
-      status
-    )
+    const existingHours = Number(dayStatusStore.getStatusByDate(selectedDate.value)?.hours) || 0
+    const defaultHours = ['annualLeave', 'compLeave', 'personalLeave', 'sickLeave'].includes(status)
+      ? (existingHours || 8)
+      : 0
+    void updateDayStatus(status, defaultHours)
   },
 })
+
+const selectedDayStatusHours = computed({
+  get() {
+    return Number(dayStatusStore.getStatusByDate(selectedDate.value)?.hours) || 0
+  },
+  set(hours) {
+    void updateDayStatus(selectedDayStatusOverride.value, Number(hours) || 0)
+  },
+})
+
+async function updateDayStatus(status, hours = 0) {
+  await dayStatusStore.setStatus(selectedDate.value, status, hours)
+  await workLogStore.loadCompTimeSummary()
+}
+
 
 const isLoading = computed(
   () =>
@@ -210,6 +222,7 @@ watch(
 onMounted(async () => {
   await Promise.all([
     categoryStore.loadCategories(),
+    workLogStore.loadCompTimeSummary(),
     loadVisibleRange(),
   ])
 })
@@ -232,16 +245,12 @@ onMounted(async () => {
         "
         :day-status-options="dayStatusOptions"
         :day-status-saving="isSavingDayStatus"
+        :selected-day-status-hours="selectedDayStatusHours"
+        :comp-time-balance="compTimeSummary.balance"
+        @update:selected-day-status-hours="selectedDayStatusHours = $event"
         @previous-week="changeWeek(-1)"
         @next-week="changeWeek(1)"
       />
-
-      <div
-        v-if="workLogError || dayStatusError"
-        class="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
-      >
-        {{ workLogError || dayStatusError }}
-      </div>
 
       <section
         class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5"

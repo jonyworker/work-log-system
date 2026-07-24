@@ -44,6 +44,10 @@ function doGet(e) {
       result.categories = getCategories_()
     }
 
+    if (resource === 'compTimeSummary' || resource === 'all') {
+      result.compTimeSummary = getCompTimeSummary_()
+    }
+
     return jsonResponse_(result)
   } catch (error) {
     return errorResponse_(error)
@@ -176,6 +180,10 @@ function createWorkLog_(payload) {
     type: payload.type,
     category: payload.category,
     hours: Number(payload.hours),
+    compTimeHours:
+      payload.type === 'overtime'
+        ? Math.max(0, Number(payload.compTimeHours) || 0)
+        : 0,
     content: payload.content,
     sortOrder:
       Number(payload.sortOrder) ||
@@ -214,6 +222,10 @@ function updateWorkLog_(payload) {
       payload.hours !== undefined
         ? Number(payload.hours)
         : Number(current.hours),
+    compTimeHours:
+      payload.compTimeHours !== undefined
+        ? Math.max(0, Number(payload.compTimeHours) || 0)
+        : Number(current.compTimeHours) || 0,
     sortOrder:
       payload.sortOrder !== undefined
         ? Number(payload.sortOrder)
@@ -239,6 +251,9 @@ function upsertDayStatus_(payload) {
 
   const labels = {
     annualLeave: '特休',
+    compLeave: '補休',
+    personalLeave: '事假',
+    sickLeave: '病假',
     makeupWork: '補班',
     typhoon: '颱風假',
   }
@@ -258,6 +273,7 @@ function upsertDayStatus_(payload) {
       ...current,
       status: payload.status,
       label: labels[payload.status],
+      hours: Number(payload.hours) || 0,
       updatedAt: now,
     }
 
@@ -271,6 +287,7 @@ function upsertDayStatus_(payload) {
     date: payload.date,
     status: payload.status,
     label: labels[payload.status],
+    hours: Number(payload.hours) || 0,
     createdAt: now,
     updatedAt: now,
   }
@@ -515,6 +532,11 @@ function normalizeRow_(row) {
         : Number(normalized.hours)
   }
 
+  if (normalized.compTimeHours !== undefined) {
+    normalized.compTimeHours =
+      normalized.compTimeHours === '' ? 0 : Number(normalized.compTimeHours)
+  }
+
   if (normalized.sortOrder !== undefined) {
     normalized.sortOrder =
       normalized.sortOrder === ''
@@ -523,6 +545,29 @@ function normalizeRow_(row) {
   }
 
   return normalized
+}
+
+
+/**
+ * 補休額度摘要：加班產生額度 - 已使用補休。
+ */
+function getCompTimeSummary_() {
+  const workLogs = getRowsAsObjects_(CONFIG.WORK_LOG_SHEET, '', '')
+  const dayStatuses = getRowsAsObjects_(CONFIG.DAY_STATUS_SHEET, '', '')
+
+  const earned = workLogs
+    .filter(item => item.type === 'overtime')
+    .reduce((total, item) => total + (Number(item.compTimeHours) || 0), 0)
+
+  const used = dayStatuses
+    .filter(item => item.status === 'compLeave')
+    .reduce((total, item) => total + (Number(item.hours) || 0), 0)
+
+  return {
+    earned,
+    used,
+    balance: earned - used,
+  }
 }
 
 /**

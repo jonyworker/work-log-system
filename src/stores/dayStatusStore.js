@@ -128,7 +128,7 @@ export const useDayStatusStore = defineStore(
 				}
 			},
 
-			async setStatus(date, status) {
+			async setStatus(date, status, hours = 0) {
 				if (this.isSaving) return null
 
 				this.isSaving = true
@@ -149,6 +149,7 @@ export const useDayStatusStore = defineStore(
 					const record = await saveDayStatus({
 						date,
 						status,
+						hours: Number(hours) || 0,
 					})
 
 					this.upsertRecord(record)

@@ -39,12 +39,23 @@ defineProps({
     type: Array,
     default: () => [],
   },
+
+  selectedDayStatusHours: {
+    type: Number,
+    default: 0,
+  },
+
+  compTimeBalance: {
+    type: Number,
+    default: 0,
+  },
 })
 
 const emit = defineEmits([
   'update:viewMode',
   'update:selectedDate',
   'update:selectedDayStatusOverride',
+  'update:selectedDayStatusHours',
   'previous-week',
   'next-week',
 ])
@@ -162,6 +173,25 @@ const emit = defineEmits([
               </option>
             </select>
           </label>
+
+          <label
+            v-if="['annualLeave', 'compLeave', 'personalLeave', 'sickLeave'].includes(selectedDayStatusOverride)"
+            class="flex items-center gap-2"
+          >
+            <span class="text-xs text-slate-500">時數</span>
+            <input
+              :value="selectedDayStatusHours"
+              type="number"
+              min="0.5"
+              step="0.5"
+              class="w-20 rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-sm"
+              @change="emit('update:selectedDayStatusHours', Number($event.target.value))"
+            />
+          </label>
+        </div>
+
+        <div class="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+          補休餘額 <strong>{{ compTimeBalance }}h</strong>
         </div>
 
         <input

@@ -114,6 +114,9 @@ function getStatusDotClasses(status) {
     holiday: 'bg-red-500',
     makeupWork: 'bg-blue-500',
     annualLeave: 'bg-emerald-500',
+    compLeave: 'bg-violet-500',
+    personalLeave: 'bg-orange-500',
+    sickLeave: 'bg-rose-500',
     typhoon: 'bg-cyan-500',
   }
 
@@ -125,6 +128,9 @@ function getStatusTextClasses(status) {
     holiday: 'text-red-700',
     makeupWork: 'text-blue-700',
     annualLeave: 'text-emerald-700',
+    compLeave: 'text-violet-700',
+    personalLeave: 'text-orange-700',
+    sickLeave: 'text-rose-700',
     typhoon: 'text-cyan-700',
   }
 
@@ -182,7 +188,7 @@ function getStatusTextClasses(status) {
               ></span>
 
               <span class="text-[10px] font-semibold">
-                {{ day.dayStatus.label }}
+                {{ day.dayStatus.label }}{{ Number(day.dayStatus.hours) > 0 ? ` ${day.dayStatus.hours}h` : '' }}
               </span>
             </div>
           </div>

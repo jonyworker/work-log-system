@@ -3,6 +3,7 @@ import {
 	createWorkLog,
 	deleteWorkLog,
 	fetchWorkLogs,
+	fetchCompTimeSummary,
 	updateWorkLog,
 } from '../api/workLogApi'
 
@@ -21,6 +22,8 @@ export const useWorkLogStore = defineStore(
 
 			loadError: '',
 			saveError: '',
+
+			compTimeSummary: { earned: 0, used: 0, balance: 0 },
 		}),
 
 		getters: {
@@ -71,6 +74,11 @@ export const useWorkLogStore = defineStore(
 		},
 
 		actions: {
+			async loadCompTimeSummary() {
+				this.compTimeSummary = await fetchCompTimeSummary()
+				return this.compTimeSummary
+			},
+
 			upsertRecord(record) {
 				const index = this.records.findIndex(
 					(item) => item.id === record.id
@@ -187,6 +195,7 @@ export const useWorkLogStore = defineStore(
 
 					this.upsertRecord(record)
 					this.loadedDates[payload.date] = true
+					await this.loadCompTimeSummary()
 
 					return record
 				} catch (error) {
@@ -213,6 +222,7 @@ export const useWorkLogStore = defineStore(
 
 					this.upsertRecord(record)
 					this.loadedDates[record.date] = true
+					await this.loadCompTimeSummary()
 
 					return record
 				} catch (error) {
@@ -243,6 +253,7 @@ export const useWorkLogStore = defineStore(
 					this.records = this.records.filter(
 						(item) => item.id !== record.id
 					)
+					await this.loadCompTimeSummary()
 				} catch (error) {
 					this.saveError =
 						error instanceof Error

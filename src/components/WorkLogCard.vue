@@ -66,6 +66,13 @@ const categoryStyle = computed(() => ({
         >
           加班
         </span>
+
+        <span
+          v-if="item.type === 'overtime' && Number(item.compTimeHours) > 0"
+          class="mt-0.5 block text-[10px] font-semibold text-emerald-700"
+        >
+          補休 +{{ item.compTimeHours }}h
+        </span>
       </div>
     </div>
 

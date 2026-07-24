@@ -94,3 +94,8 @@ export async function deleteDayStatus(date) {
 
 	return result.data
 }
+
+export async function fetchCompTimeSummary() {
+  const result = await apiGet({ resource: 'compTimeSummary' })
+  return result.compTimeSummary ?? { earned: 0, used: 0, balance: 0 }
+}
