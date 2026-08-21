@@ -11,6 +11,7 @@ import AppHeader from './components/AppHeader.vue'
 import AddWorkDialog from './components/AddWorkDialog.vue'
 import DayView from './components/DayView.vue'
 import WeekView from './components/WeekView.vue'
+import MonthView from './components/MonthView.vue'
 
 import { useCalendar } from './composables/useCalendar'
 import { useCategoryStore } from './stores/categoryStore'
@@ -26,8 +27,13 @@ const {
   selectedDateLabel,
   weekRangeLabel,
   weekNumber,
+  monthDays,
+  monthStartDate,
+  monthEndDate,
+  monthLabel,
   selectedDateBaseStatus,
   changeWeek,
+  changeMonth,
   selectDate,
 } = useCalendar()
 
@@ -193,6 +199,23 @@ async function loadVisibleRange(force = false) {
     return
   }
 
+  if (viewMode.value === 'month') {
+    await Promise.all([
+      workLogStore.loadRange(
+        monthStartDate.value,
+        monthEndDate.value,
+        force
+      ),
+      dayStatusStore.loadRange(
+        monthStartDate.value,
+        monthEndDate.value,
+        force
+      ),
+    ])
+
+    return
+  }
+
   await Promise.all([
     workLogStore.loadRange(
       weekStartDate.value,
@@ -213,6 +236,8 @@ watch(
     viewMode,
     weekStartDate,
     weekEndDate,
+    monthStartDate,
+    monthEndDate,
   ],
   () => {
     void loadVisibleRange()
@@ -240,6 +265,7 @@ onMounted(async () => {
         :selected-date-label="selectedDateLabel"
         :week-number="weekNumber"
         :week-range-label="weekRangeLabel"
+        :month-label="monthLabel"
         :selected-date-base-status="
           selectedDateBaseStatus
         "
@@ -250,6 +276,8 @@ onMounted(async () => {
         @update:selected-day-status-hours="selectedDayStatusHours = $event"
         @previous-week="changeWeek(-1)"
         @next-week="changeWeek(1)"
+        @previous-month="changeMonth(-1)"
+        @next-month="changeMonth(1)"
       />
 
       <section
@@ -309,13 +337,22 @@ onMounted(async () => {
           />
 
           <WeekView
-            v-else
+            v-else-if="viewMode === 'week'"
             :days="weekDays"
             :logs="workLogs"
             :day-statuses="dayStatuses"
             :selected-date="selectedDate"
             @select-date="handleSelectDate"
             @edit="openEditDialog"
+          />
+
+          <MonthView
+            v-else
+            :days="monthDays"
+            :logs="workLogs"
+            :day-statuses="dayStatuses"
+            :selected-date="selectedDate"
+            @select-date="handleSelectDate"
           />
         </template>
       </section>
