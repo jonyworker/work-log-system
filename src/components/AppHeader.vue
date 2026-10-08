@@ -1,5 +1,8 @@
 <script setup>
-defineProps({
+import { computed } from 'vue'
+import DayStatusBadge from "./DayStatusBadge.vue"
+
+const props = defineProps({
   viewMode: {
     type: String,
     required: true,
@@ -40,6 +43,10 @@ defineProps({
     type: Number,
     default: 0,
   },
+  selectedDayStatusLabel: {
+    type: String,
+    default: '',
+  },
   dayStatusSaving: {
     type: Boolean,
     default: false,
@@ -50,11 +57,21 @@ defineProps({
   },
 })
 
+const currentStatus = computed(() => {
+  if (props.selectedDayStatusOverride === 'none') return null
+  return {
+    status: props.selectedDayStatusOverride,
+    label: props.selectedDayStatusLabel,
+    hours: props.selectedDayStatusHours,
+  }
+})
+
 const emit = defineEmits([
   'update:viewMode',
   'update:selectedDate',
   'update:selectedDayStatusOverride',
   'update:selectedDayStatusHours',
+  'update:selectedDayStatusLabel',
   'previous-week',
   'next-week',
   'previous-month',
@@ -82,6 +99,11 @@ const emit = defineEmits([
             {{ monthLabel }}
           </template>
         </p>
+        <DayStatusBadge
+          v-if="viewMode === 'day' && currentStatus"
+          class="mt-2"
+          :status="currentStatus"
+        />
       </div>
 
       <div class="flex flex-wrap items-center gap-3">
@@ -193,6 +215,24 @@ const emit = defineEmits([
               step="0.5"
               class="w-20 rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-sm"
               @change="emit('update:selectedDayStatusHours', Number($event.target.value))"
+            />
+          </label>
+
+          <label
+            v-if="selectedDayStatusOverride !== 'none'"
+            class="flex items-center gap-2"
+          >
+            <span class="whitespace-nowrap text-xs text-slate-500">名稱／備註</span>
+            <input
+              :key="`${selectedDate}-${selectedDayStatusOverride}-${selectedDayStatusLabel}`"
+              :value="selectedDayStatusLabel"
+              type="text"
+              maxlength="80"
+              placeholder="例如：國慶日補假"
+              :disabled="dayStatusSaving"
+              class="w-40 rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-700 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:opacity-50"
+              @change="emit('update:selectedDayStatusLabel', $event.target.value)"
+              @keydown.enter="$event.target.blur()"
             />
           </label>
         </div>

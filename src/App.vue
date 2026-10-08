@@ -2,12 +2,14 @@
 import {
   computed,
   onMounted,
+  onUnmounted,
   ref,
   watch,
 } from 'vue'
 import { storeToRefs } from 'pinia'
 
 import AppHeader from './components/AppHeader.vue'
+import { supabase } from './api/apiClient'
 import AddWorkDialog from './components/AddWorkDialog.vue'
 import DayView from './components/DayView.vue'
 import WeekView from './components/WeekView.vue'
@@ -58,6 +60,33 @@ const {
   saveError: dayStatusSaveError,
 } = storeToRefs(dayStatusStore)
 
+const authReady = ref(false)
+const currentUser = ref(null)
+const loginEmail = ref('')
+const loginPassword = ref('')
+const loginBusy = ref(false)
+const loginError = ref('')
+let authSubscription = null
+
+async function login() {
+  loginBusy.value = true
+  loginError.value = ''
+  const { error } = await supabase.auth.signInWithPassword({ email: loginEmail.value, password: loginPassword.value })
+  loginBusy.value = false
+  if (error) loginError.value = '登入失敗，請確認 Email、密碼及帳號驗證狀態'
+  else loginPassword.value = ''
+}
+async function logout() {
+  await supabase.auth.signOut()
+  currentUser.value = null
+  workLogStore.$reset()
+  dayStatusStore.$reset()
+  categoryStore.$reset()
+}
+async function initData() {
+  await Promise.all([categoryStore.loadCategories(), workLogStore.loadCompTimeSummary(), loadVisibleRange()])
+}
+
 const dialogOpen = ref(false)
 const dialogType = ref('work')
 const editingLog = ref(null)
@@ -79,6 +108,7 @@ const dayStatusOptions = [
     value: 'typhoon',
     label: '颱風假',
   },
+  { value: 'holiday', label: '國定假日' },
 ]
 
 const selectedDateLogs = computed(() =>
@@ -96,7 +126,8 @@ const selectedDayStatusOverride = computed({
     const defaultHours = ['annualLeave', 'compLeave', 'personalLeave', 'sickLeave'].includes(status)
       ? (existingHours || 8)
       : 0
-    void updateDayStatus(status, defaultHours)
+    const defaultLabel = dayStatusOptions.find((item) => item.value === status)?.label ?? ''
+    void updateDayStatus(status, defaultHours, defaultLabel)
   },
 })
 
@@ -105,12 +136,22 @@ const selectedDayStatusHours = computed({
     return Number(dayStatusStore.getStatusByDate(selectedDate.value)?.hours) || 0
   },
   set(hours) {
-    void updateDayStatus(selectedDayStatusOverride.value, Number(hours) || 0)
+    void updateDayStatus(selectedDayStatusOverride.value, Number(hours) || 0, selectedDayStatusLabel.value)
   },
 })
 
-async function updateDayStatus(status, hours = 0) {
-  await dayStatusStore.setStatus(selectedDate.value, status, hours)
+const selectedDayStatusLabel = computed({
+  get() {
+    const existing = dayStatusStore.getStatusByDate(selectedDate.value)
+    return existing?.label ?? dayStatusOptions.find((item) => item.value === selectedDayStatusOverride.value)?.label ?? ''
+  },
+  set(value) {
+    void updateDayStatus(selectedDayStatusOverride.value, selectedDayStatusHours.value, value.trim())
+  },
+})
+
+async function updateDayStatus(status, hours = 0, label) {
+  await dayStatusStore.setStatus(selectedDate.value, status, hours, label)
   await workLogStore.loadCompTimeSummary()
 }
 
@@ -240,133 +281,159 @@ watch(
     monthEndDate,
   ],
   () => {
-    void loadVisibleRange()
+    if (currentUser.value) void loadVisibleRange()
   }
 )
 
 onMounted(async () => {
-  await Promise.all([
-    categoryStore.loadCategories(),
-    workLogStore.loadCompTimeSummary(),
-    loadVisibleRange(),
-  ])
+  const { data: { session } } = await supabase.auth.getSession()
+  currentUser.value = session?.user ?? null
+  authReady.value = true
+  if (currentUser.value) void initData()
+  const { data: { subscription } } = supabase.auth.onAuthStateChange((event, nextSession) => {
+    const oldId = currentUser.value?.id
+    currentUser.value = nextSession?.user ?? null
+    if (event === 'SIGNED_IN' && currentUser.value && oldId !== currentUser.value.id) {
+      void initData()
+    }
+  })
+  authSubscription = subscription
 })
+onUnmounted(() => authSubscription?.unsubscribe())
 </script>
 
 <template>
   <main class="min-h-screen bg-slate-100 p-3 sm:p-5 lg:p-8">
-    <div class="mx-auto max-w-[1500px]">
-      <AppHeader
-        v-model:view-mode="viewMode"
-        v-model:selected-date="selectedDate"
-        v-model:selected-day-status-override="
+    <div v-if="!authReady" class="grid min-h-[70vh] place-items-center text-slate-500">正在確認登入狀態…</div>
+    <section v-else-if="!currentUser" class="mx-auto mt-[12vh] max-w-md rounded-2xl bg-white p-7 shadow-lg">
+      <h1 class="text-2xl font-bold text-slate-900">工作日誌登入</h1>
+      <p class="mt-2 text-sm text-slate-500">請使用你在 Supabase 建立的個人帳號</p>
+      <form class="mt-6 space-y-4" @submit.prevent="login">
+        <label class="block text-sm font-medium">Email<input v-model.trim="loginEmail" type="email" autocomplete="email" required class="mt-1 w-full rounded-xl border border-slate-300 p-3" /></label>
+        <label class="block text-sm font-medium">密碼<input v-model="loginPassword" type="password" autocomplete="current-password" required class="mt-1 w-full rounded-xl border border-slate-300 p-3" /></label>
+        <p v-if="loginError" role="alert" class="text-sm text-red-600">{{ loginError }}</p>
+        <button :disabled="loginBusy" class="w-full rounded-xl bg-slate-900 p-3 font-medium text-white disabled:opacity-50">{{ loginBusy ? '登入中…' : '登入' }}</button>
+      </form>
+    </section>
+    <template v-else>
+      <div class="mx-auto max-w-[1500px] mb-2 flex justify-end">
+        <button type="button" @click="logout" class="rounded-lg bg-white px-3 py-2 text-sm text-slate-600 shadow-sm">登出</button>
+      </div>
+      <div class="mx-auto max-w-[1500px]">
+        <AppHeader
+          v-model:view-mode="viewMode"
+          v-model:selected-date="selectedDate"
+          v-model:selected-day-status-override="
           selectedDayStatusOverride
         "
-        :selected-date-label="selectedDateLabel"
-        :week-number="weekNumber"
-        :week-range-label="weekRangeLabel"
-        :month-label="monthLabel"
-        :selected-date-base-status="
+          :selected-date-label="selectedDateLabel"
+          :week-number="weekNumber"
+          :week-range-label="weekRangeLabel"
+          :month-label="monthLabel"
+          :selected-date-base-status="
           selectedDateBaseStatus
         "
-        :day-status-options="dayStatusOptions"
-        :day-status-saving="isSavingDayStatus"
-        :selected-day-status-hours="selectedDayStatusHours"
-        :comp-time-balance="compTimeSummary.balance"
-        @update:selected-day-status-hours="selectedDayStatusHours = $event"
-        @previous-week="changeWeek(-1)"
-        @next-week="changeWeek(1)"
-        @previous-month="changeMonth(-1)"
-        @next-month="changeMonth(1)"
+          :day-status-options="dayStatusOptions"
+          :day-status-saving="isSavingDayStatus"
+          :selected-day-status-hours="selectedDayStatusHours"
+          :selected-day-status-label="selectedDayStatusLabel"
+          :comp-time-balance="compTimeSummary.balance"
+          @update:selected-day-status-hours="selectedDayStatusHours = $event"
+          @update:selected-day-status-label="selectedDayStatusLabel = $event"
+          @previous-week="changeWeek(-1)"
+          @next-week="changeWeek(1)"
+          @previous-month="changeMonth(-1)"
+          @next-month="changeMonth(1)"
+        />
+
+        <section
+          class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5"
+        >
+          <div
+            v-if="saveError"
+            class="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
+          >
+            {{ saveError }}
+          </div>
+
+          <div
+            v-if="isLoading"
+            class="grid min-h-64 place-items-center"
+          >
+            <div class="text-center">
+              <div
+                class="mx-auto h-8 w-8 animate-spin rounded-full border-4 border-slate-200 border-t-slate-900"
+              ></div>
+
+              <p class="mt-3 text-sm text-slate-500">
+                正在讀取資料……
+              </p>
+            </div>
+          </div>
+
+          <div
+            v-else-if="loadError"
+            class="grid min-h-64 place-items-center"
+          >
+            <div class="text-center">
+              <p class="font-semibold text-red-700">
+                無法載入資料
+              </p>
+
+              <p class="mt-2 text-sm text-slate-500">
+                {{ loadError }}
+              </p>
+
+              <button
+                type="button"
+                class="mt-4 rounded-xl bg-slate-900 px-4 py-2 text-sm text-white"
+                @click="loadVisibleRange(true)"
+              >
+                重新載入
+              </button>
+            </div>
+          </div>
+
+          <template v-else>
+            <DayView
+              v-if="viewMode === 'day'"
+              :logs="selectedDateLogs"
+              @add="openAddDialog"
+              @edit="openEditDialog"
+            />
+
+            <WeekView
+              v-else-if="viewMode === 'week'"
+              :days="weekDays"
+              :logs="workLogs"
+              :day-statuses="dayStatuses"
+              :selected-date="selectedDate"
+              @select-date="handleSelectDate"
+              @edit="openEditDialog"
+            />
+
+            <MonthView
+              v-else
+              :days="monthDays"
+              :logs="workLogs"
+              :day-statuses="dayStatuses"
+              :selected-date="selectedDate"
+              @select-date="handleSelectDate"
+            />
+          </template>
+        </section>
+      </div>
+
+      <AddWorkDialog
+        :open="dialogOpen"
+        :type="dialogType"
+        :date="selectedDate"
+        :editing-log="editingLog"
+        :is-saving="isSavingWorkLog"
+        @close="closeDialog"
+        @submit="saveWorkLog"
+        @delete="removeWorkLog"
       />
-
-      <section
-        class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5"
-      >
-        <div
-          v-if="saveError"
-          class="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
-        >
-          {{ saveError }}
-        </div>
-
-        <div
-          v-if="isLoading"
-          class="grid min-h-64 place-items-center"
-        >
-          <div class="text-center">
-            <div
-              class="mx-auto h-8 w-8 animate-spin rounded-full border-4 border-slate-200 border-t-slate-900"
-            ></div>
-
-            <p class="mt-3 text-sm text-slate-500">
-              正在讀取資料……
-            </p>
-          </div>
-        </div>
-
-        <div
-          v-else-if="loadError"
-          class="grid min-h-64 place-items-center"
-        >
-          <div class="text-center">
-            <p class="font-semibold text-red-700">
-              無法載入資料
-            </p>
-
-            <p class="mt-2 text-sm text-slate-500">
-              {{ loadError }}
-            </p>
-
-            <button
-              type="button"
-              class="mt-4 rounded-xl bg-slate-900 px-4 py-2 text-sm text-white"
-              @click="loadVisibleRange(true)"
-            >
-              重新載入
-            </button>
-          </div>
-        </div>
-
-        <template v-else>
-          <DayView
-            v-if="viewMode === 'day'"
-            :logs="selectedDateLogs"
-            @add="openAddDialog"
-            @edit="openEditDialog"
-          />
-
-          <WeekView
-            v-else-if="viewMode === 'week'"
-            :days="weekDays"
-            :logs="workLogs"
-            :day-statuses="dayStatuses"
-            :selected-date="selectedDate"
-            @select-date="handleSelectDate"
-            @edit="openEditDialog"
-          />
-
-          <MonthView
-            v-else
-            :days="monthDays"
-            :logs="workLogs"
-            :day-statuses="dayStatuses"
-            :selected-date="selectedDate"
-            @select-date="handleSelectDate"
-          />
-        </template>
-      </section>
-    </div>
-
-    <AddWorkDialog
-      :open="dialogOpen"
-      :type="dialogType"
-      :date="selectedDate"
-      :editing-log="editingLog"
-      :is-saving="isSavingWorkLog"
-      @close="closeDialog"
-      @submit="saveWorkLog"
-      @delete="removeWorkLog"
-    />
+    </template>
   </main>
 </template>

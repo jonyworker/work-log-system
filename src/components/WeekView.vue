@@ -1,6 +1,7 @@
 <script setup>
 import { computed } from 'vue'
 import WorkLogCard from './WorkLogCard.vue'
+import DayStatusBadge from './DayStatusBadge.vue'
 
 const props = defineProps({
   days: {
@@ -109,33 +110,6 @@ function getDateClasses(day) {
   }
 }
 
-function getStatusDotClasses(status) {
-  const styles = {
-    holiday: 'bg-red-500',
-    makeupWork: 'bg-blue-500',
-    annualLeave: 'bg-emerald-500',
-    compLeave: 'bg-violet-500',
-    personalLeave: 'bg-orange-500',
-    sickLeave: 'bg-rose-500',
-    typhoon: 'bg-cyan-500',
-  }
-
-  return styles[status] || 'bg-slate-400'
-}
-
-function getStatusTextClasses(status) {
-  const styles = {
-    holiday: 'text-red-700',
-    makeupWork: 'text-blue-700',
-    annualLeave: 'text-emerald-700',
-    compLeave: 'text-violet-700',
-    personalLeave: 'text-orange-700',
-    sickLeave: 'text-rose-700',
-    typhoon: 'text-cyan-700',
-  }
-
-  return styles[status] || 'text-slate-600'
-}
 </script>
 
 <template>
@@ -172,25 +146,12 @@ function getStatusTextClasses(status) {
               </span>
             </div>
 
-            <!-- 右上：日期狀態 -->
-            <div
+            <!-- 右上：共用日期狀態標籤 -->
+            <DayStatusBadge
               v-if="day.dayStatus"
-              class="flex shrink-0 items-center gap-1.5 pt-1"
-              :class="
-                getStatusTextClasses(day.dayStatus.status)
-              "
-            >
-              <span
-                class="h-1.5 w-1.5 rounded-full"
-                :class="
-                  getStatusDotClasses(day.dayStatus.status)
-                "
-              ></span>
-
-              <span class="text-[10px] font-semibold">
-                {{ day.dayStatus.label }}{{ Number(day.dayStatus.hours) > 0 ? ` ${day.dayStatus.hours}h` : '' }}
-              </span>
-            </div>
+              class="mt-1 shrink-0"
+              :status="day.dayStatus"
+            />
           </div>
 
           <!-- 左下：工時 -->
