@@ -54,8 +54,8 @@ async function listAll(
 	startDate = '',
 	endDate = ''
 ) {
-	await requireUser()
-
+	// Supabase Client 會自動附帶目前的登入工作階段；讀取權限由 RLS 驗證。
+	// 不再為每次讀取額外呼叫 auth.getUser()，避免重複 Auth 請求。
 	const batchSize = 1000
 	const results = []
 
@@ -153,8 +153,7 @@ export async function fetchAllData() {
 // Category Lookup
 // ========================
 
-async function getCategoryId(name) {
-	const user = await requireUser()
+async function getCategoryId(name, user) {
 
 	const data = unwrap(
 		await supabase
@@ -186,7 +185,7 @@ function workData(payload, categoryId) {
 
 export async function createWorkLog(payload) {
 	const user = await requireUser()
-	const categoryId = await getCategoryId(payload.category)
+	const categoryId = await getCategoryId(payload.category, user)
 
 	const data = unwrap(
 		await supabase
@@ -208,7 +207,7 @@ export async function createWorkLog(payload) {
 
 export async function updateWorkLog(payload) {
 	const user = await requireUser()
-	const categoryId = await getCategoryId(payload.category)
+	const categoryId = await getCategoryId(payload.category, user)
 
 	const data = unwrap(
 		await supabase

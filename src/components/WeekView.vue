@@ -4,191 +4,77 @@ import WorkLogCard from './WorkLogCard.vue'
 import DayStatusBadge from './DayStatusBadge.vue'
 
 const props = defineProps({
-  days: {
-    type: Array,
-    default: () => [],
-  },
-
-  logs: {
-    type: Array,
-    default: () => [],
-  },
-
-  dayStatuses: {
-    type: Array,
-    default: () => [],
-  },
-
-  selectedDate: {
-    type: String,
-    required: true,
-  },
+  days: { type: Array, default: () => [] },
+  logs: { type: Array, default: () => [] },
+  dayStatuses: { type: Array, default: () => [] },
+  selectedDate: { type: String, required: true },
 })
+const emit = defineEmits(['select-date', 'edit'])
 
-const emit = defineEmits([
-  'select-date',
-  'edit',
-])
-
-const weekData = computed(() =>
-  props.days.map((day) => {
-    const items = props.logs
-      .filter((item) => item.date === day.date)
-      .sort((a, b) => {
-        if (a.type !== b.type) {
-          return a.type === 'work' ? -1 : 1
-        }
-
-        return a.sortOrder - b.sortOrder
-      })
-
-    const dayStatus =
-      props.dayStatuses.find(
-        (status) => status.date === day.date
-      ) || null
-
-    const workHours = items
-      .filter((item) => item.type === 'work')
-      .reduce(
-        (total, item) => total + Number(item.hours),
-        0
-      )
-
-    const overtimeHours = items
-      .filter((item) => item.type === 'overtime')
-      .reduce(
-        (total, item) => total + Number(item.hours),
-        0
-      )
-
-    return {
-      ...day,
-      items,
-      dayStatus,
-      workHours,
-      overtimeHours,
-    }
-  })
-)
-
-function getColumnClasses(day) {
-  return [
-    day.date === props.selectedDate
-      ? 'border-slate-900 ring-2 ring-slate-900/10'
-      : 'border-slate-200',
-
-    {
-      'border-t-blue-500': day.weekday === '週六',
-      'border-t-red-500': day.weekday === '週日',
-
-      'border-t-slate-300':
-        day.weekday !== '週六' &&
-        day.weekday !== '週日',
-    },
-  ]
-}
-
-function getWeekdayClasses(day) {
+const weekData = computed(() => props.days.map((day) => {
+  const items = props.logs
+    .filter((item) => item.date === day.date)
+    .sort((a, b) => {
+      if (a.type !== b.type) return a.type === 'work' ? -1 : 1
+      return (Number(a.sortOrder) || 0) - (Number(b.sortOrder) || 0)
+    })
+  const sum = (type) => items.filter((item) => item.type === type)
+    .reduce((total, item) => total + (Number(item.hours) || 0), 0)
   return {
-    'text-blue-600': day.weekday === '週六',
-    'text-red-600': day.weekday === '週日',
-
-    'text-slate-500':
-      day.weekday !== '週六' &&
-      day.weekday !== '週日',
+    ...day,
+    items,
+    workHours: sum('work'),
+    overtimeHours: sum('overtime'),
+    dayStatus: props.dayStatuses.find((status) => status.date === day.date) || null,
   }
-}
+}))
 
-function getDateClasses(day) {
-  return {
-    'text-blue-700': day.weekday === '週六',
-    'text-red-700': day.weekday === '週日',
-
-    'text-slate-950':
-      day.weekday !== '週六' &&
-      day.weekday !== '週日',
-  }
-}
-
+const hoursLabel = (hours) => `${Number(hours.toFixed(2))}h`
+const isSaturday = (day) => day.weekday === '週六'
+const isSunday = (day) => day.weekday === '週日'
 </script>
 
 <template>
-  <div class="overflow-x-auto pb-3">
-    <div class="grid min-w-[1120px] grid-cols-7 gap-3">
+  <div class="wl-week-scroll" aria-label="每週工作紀錄">
+    <div class="wl-week-grid">
       <section
         v-for="day in weekData"
         :key="day.date"
-        class="min-h-[460px] overflow-hidden rounded-2xl border border-t-4 bg-white shadow-sm transition"
-        :class="getColumnClasses(day)"
+        class="wl-week-column"
+        :class="{
+          'wl-week-column--selected': day.date === selectedDate,
+          'wl-week-column--weekend': isSaturday(day) || isSunday(day),
+        }"
+        :aria-label="`${day.weekday} ${day.label}：${day.items.length} 筆紀錄`"
       >
-        <!-- A 區：固定高度 -->
         <button
           type="button"
-          class="flex h-[100px] w-full flex-col justify-between px-4 py-3 text-left transition hover:bg-slate-50"
+          class="wl-week-day-button"
+          :aria-current="day.date === selectedDate ? 'date' : undefined"
+          :title="`前往 ${day.date} 的單日紀錄`"
           @click="emit('select-date', day.date)"
         >
-          <!-- 上排 -->
-          <div class="flex items-start justify-between gap-3">
-            <!-- 左上：星期、日期 -->
-            <div class="min-w-0">
-              <span
-                class="block text-xs font-semibold"
-                :class="getWeekdayClasses(day)"
-              >
-                {{ day.weekday }}
-              </span>
-
-              <span
-                class="mt-1 block text-xl font-bold leading-none"
-                :class="getDateClasses(day)"
-              >
-                {{ day.label }}
-              </span>
-            </div>
-
-            <!-- 右上：共用日期狀態標籤 -->
-            <DayStatusBadge
-              v-if="day.dayStatus"
-              class="mt-1 shrink-0"
-              :status="day.dayStatus"
-            />
+          <div class="wl-week-day-top">
+            <div class="wl-week-day-name" :class="{ 'wl-week-saturday': isSaturday(day), 'wl-week-sunday': isSunday(day) }">{{ day.weekday }}</div>
+            <DayStatusBadge v-if="day.dayStatus" :status="day.dayStatus" class="wl-week-holiday" />
           </div>
-
-          <!-- 左下：工時 -->
-          <div class="flex items-center gap-2 ">
-            <span class="text-xs text-slate-500">
-              工作 {{ day.workHours }}h
-            </span>
-
-            <span
-              v-if="day.overtimeHours"
-              class="text-xs font-semibold text-amber-600"
-            >
-              加班 {{ day.overtimeHours }}h
-            </span>
+          <div class="wl-week-day-number" :class="{ 'wl-week-saturday': isSaturday(day), 'wl-week-sunday': isSunday(day) }">{{ day.label }}</div>
+          <div class="wl-week-totals">
+            <span>工作 {{ hoursLabel(day.workHours) }}</span>
+            <span v-if="day.overtimeHours > 0" class="wl-week-overtime-hours">加班 {{ hoursLabel(day.overtimeHours) }}</span>
           </div>
+          <div class="wl-week-count">{{ day.items.length }} 筆紀錄</div>
         </button>
-
-        <!-- A / B 分隔 -->
-        <div class="mx-3 border-t border-slate-200"></div>
-
-        <!-- B 區：工作紀錄 -->
-        <div class="space-y-3 px-3 py-3">
+        <div class="wl-week-day-divider"></div>
+        <div class="wl-week-entries">
           <WorkLogCard
             v-for="item in day.items"
             :key="item.id"
             :item="item"
+            variant="week"
             @edit="emit('edit', $event)"
           />
-
-          <div
-            v-if="!day.items.length"
-            class="rounded-xl border border-dashed border-slate-200 px-3 py-7 text-center"
-          >
-            <p class="text-xs text-slate-400">
-              尚無紀錄
-            </p>
-          </div>
+          <p v-if="!day.items.length" class="wl-week-empty">{{ day.dayStatus ? '當日無工作紀錄' : '尚無紀錄' }}</p>
         </div>
       </section>
     </div>

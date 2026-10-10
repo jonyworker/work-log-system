@@ -1,3 +1,4 @@
+import { missingDateRanges } from '../utils/missingDateRanges'
 import { defineStore } from 'pinia'
 import {
 	createWorkLog,
@@ -6,6 +7,10 @@ import {
 	fetchCompTimeSummary,
 	updateWorkLog,
 } from '../api/workLogApi'
+
+// 所有同一 Store 的日期查詢依序執行，避免背景預載與畫面請求重複抓取。
+let pendingLoad = Promise.resolve()
+let foregroundLoads = 0
 
 export const useWorkLogStore = defineStore(
 	'workLogs',
@@ -123,55 +128,46 @@ export const useWorkLogStore = defineStore(
 				return true
 			},
 
-			async loadRange(
-				startDate,
-				endDate,
-				force = false
-			) {
-				if (
-					!force &&
-					this.isRangeLoaded(startDate, endDate)
-				) {
-					return this.getLogsByRange(
-						startDate,
-						endDate
-					)
+			async loadRange(startDate, endDate, force = false, background = false) {
+				if (!force && this.isRangeLoaded(startDate, endDate)) {
+					return this.getLogsByRange(startDate, endDate)
 				}
-
-				this.isLoading = true
-				this.loadError = ''
-
-				try {
-					const records = await fetchWorkLogs(
-						startDate,
-						endDate
-					)
-
-					/*
-					 * 強制重新讀取時，先移除該範圍的舊資料，
-					 * 避免後端已刪除的資料仍留在 Pinia。
-					 */
-					if (force) {
-						this.records = this.records.filter(
-							(item) =>
-								item.date < startDate ||
-								item.date > endDate
-						)
+				if (!background) {
+					foregroundLoads++
+					this.isLoading = true
+					this.loadError = ''
+				}
+				const task = async () => {
+					const ranges = force
+						? [[startDate, endDate]]
+						: missingDateRanges(this.loadedDates, startDate, endDate)
+					for (const [from, to] of ranges) {
+						const records = await fetchWorkLogs(from, to)
+						if (force) {
+							this.records = this.records.filter(
+								item => item.date < from || item.date > to
+							)
+						}
+						this.mergeRecords(records)
+						this.markRangeLoaded(from, to)
 					}
-
-					this.mergeRecords(records)
-					this.markRangeLoaded(startDate, endDate)
-
-					return records
+					return this.getLogsByRange(startDate, endDate)
+				}
+				// 即使前一個讀取失敗，也允許後續範圍正常嘗試。
+				const promise = pendingLoad.then(task, task)
+				pendingLoad = promise.catch(() => {})
+				try {
+					return await promise
 				} catch (error) {
-					this.loadError =
-						error instanceof Error
-							? error.message
-							: '工作紀錄載入失敗'
-
+					if (!background) {
+						this.loadError = error instanceof Error ? error.message : '資料載入失敗'
+					}
 					throw error
 				} finally {
-					this.isLoading = false
+						if (!background) {
+						foregroundLoads--
+						this.isLoading = foregroundLoads > 0
+					}
 				}
 			},
 

@@ -80,7 +80,7 @@ const emit = defineEmits([
 </script>
 
 <template>
-  <header class="mb-5 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+  <header class="wl-editorial-header mb-5 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
     <div class="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
       <div>
         <p class="text-sm font-medium text-slate-500">Work Log</p>

@@ -9,11 +9,13 @@ import {
 import { storeToRefs } from 'pinia'
 
 import AppHeader from './components/AppHeader.vue'
+import AppSidebar from './components/AppSidebar.vue'
 import { supabase } from './api/apiClient'
 import AddWorkDialog from './components/AddWorkDialog.vue'
 import DayView from './components/DayView.vue'
 import WeekView from './components/WeekView.vue'
 import MonthView from './components/MonthView.vue'
+import WorkHistoryView from './components/WorkHistoryView.vue'
 
 import { useCalendar } from './composables/useCalendar'
 import { useCategoryStore } from './stores/categoryStore'
@@ -66,6 +68,14 @@ const loginEmail = ref('')
 const loginPassword = ref('')
 const loginBusy = ref(false)
 const loginError = ref('')
+const sidebarCollapsed = ref(false)
+const activePage = ref('calendar')
+const loggingOut = ref(false)
+
+function toggleSidebar() {
+  sidebarCollapsed.value = !sidebarCollapsed.value
+  try { localStorage.setItem('worklog-sidebar-collapsed', String(sidebarCollapsed.value)) } catch {}
+}
 let authSubscription = null
 
 async function login() {
@@ -77,7 +87,13 @@ async function login() {
   else loginPassword.value = ''
 }
 async function logout() {
-  await supabase.auth.signOut()
+  if (loggingOut.value) return
+  loggingOut.value = true
+  clearTimeout(prefetchTimer)
+  prefetchRevision++
+  const { error } = await supabase.auth.signOut()
+  loggingOut.value = false
+  if (error) { window.alert('登出失敗，請稍後重試'); return }
   currentUser.value = null
   workLogStore.$reset()
   dayStatusStore.$reset()
@@ -221,6 +237,51 @@ async function removeWorkLog(record) {
 function handleSelectDate(date) {
   selectDate(date, true)
 }
+function openHistoryDate(date) {
+  activePage.value = 'calendar'
+  selectDate(date, true)
+}
+
+let prefetchTimer = null
+let prefetchRevision = 0
+
+function formatLocalDate(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
+
+// 與月曆一致，涵蓋月份頭尾的週一至週日。
+function monthGridRange(year, monthIndex) {
+  const first = new Date(year, monthIndex, 1)
+  const last = new Date(year, monthIndex + 1, 0)
+  const start = new Date(first)
+  start.setDate(start.getDate() - (start.getDay() + 6) % 7)
+  const end = new Date(last)
+  end.setDate(end.getDate() + (7 - end.getDay()) % 7)
+  return [formatLocalDate(start), formatLocalDate(end)]
+}
+
+function scheduleAdjacentMonths() {
+  clearTimeout(prefetchTimer)
+  const revision = ++prefetchRevision
+  if (!currentUser.value || viewMode.value !== 'month') return
+  const [year, month] = selectedDate.value.split('-').map(Number)
+  prefetchTimer = setTimeout(async () => {
+    for (const offset of [-1, 1]) {
+      if (revision !== prefetchRevision || !currentUser.value || viewMode.value !== 'month') return
+      const date = new Date(year, month - 1 + offset, 1)
+      const [start, end] = monthGridRange(date.getFullYear(), date.getMonth())
+      try {
+        await Promise.all([
+          workLogStore.loadRange(start, end, false, true),
+          dayStatusStore.loadRange(start, end, false, true),
+        ])
+      } catch (error) {
+        // 預載失敗不阻擋操作，使用者切換時仍能正常重新讀取。
+        console.warn('相鄰月份背景預載失敗', error)
+      }
+    }
+  }, 250)
+}
 
 async function loadVisibleRange(force = false) {
   if (viewMode.value === 'day') {
@@ -254,6 +315,7 @@ async function loadVisibleRange(force = false) {
       ),
     ])
 
+    scheduleAdjacentMonths()
     return
   }
 
@@ -281,11 +343,14 @@ watch(
     monthEndDate,
   ],
   () => {
+    clearTimeout(prefetchTimer)
+    prefetchRevision++
     if (currentUser.value) void loadVisibleRange()
   }
 )
 
 onMounted(async () => {
+  try { sidebarCollapsed.value = localStorage.getItem('worklog-sidebar-collapsed') === 'true' } catch {}
   const { data: { session } } = await supabase.auth.getSession()
   currentUser.value = session?.user ?? null
   authReady.value = true
@@ -299,11 +364,15 @@ onMounted(async () => {
   })
   authSubscription = subscription
 })
-onUnmounted(() => authSubscription?.unsubscribe())
+onUnmounted(() => {
+  clearTimeout(prefetchTimer)
+  prefetchRevision++
+  authSubscription?.unsubscribe()
+})
 </script>
 
 <template>
-  <main class="min-h-screen bg-slate-100 p-3 sm:p-5 lg:p-8">
+  <main class="wl-app-shell" :class="!currentUser ? 'p-3 sm:p-5 lg:p-8' : ''">
     <div v-if="!authReady" class="grid min-h-[70vh] place-items-center text-slate-500">正在確認登入狀態…</div>
     <section v-else-if="!currentUser" class="mx-auto mt-[12vh] max-w-md rounded-2xl bg-white p-7 shadow-lg">
       <h1 class="text-2xl font-bold text-slate-900">工作日誌登入</h1>
@@ -316,11 +385,12 @@ onUnmounted(() => authSubscription?.unsubscribe())
       </form>
     </section>
     <template v-else>
-      <div class="mx-auto max-w-[1500px] mb-2 flex justify-end">
-        <button type="button" @click="logout" class="rounded-lg bg-white px-3 py-2 text-sm text-slate-600 shadow-sm">登出</button>
-      </div>
-      <div class="mx-auto max-w-[1500px]">
+      <div class="flex min-h-screen">
+        <AppSidebar :collapsed="sidebarCollapsed" :active-page="activePage" :email="currentUser.email || ''" :logging-out="loggingOut" @toggle="toggleSidebar" @navigate="activePage = $event" @logout="logout" />
+        <div class="wl-workspace">
+          <div class="wl-workspace-inner">
         <AppHeader
+          v-if="activePage === 'calendar'"
           v-model:view-mode="viewMode"
           v-model:selected-date="selectedDate"
           v-model:selected-day-status-override="
@@ -346,7 +416,9 @@ onUnmounted(() => authSubscription?.unsubscribe())
           @next-month="changeMonth(1)"
         />
 
+        <WorkHistoryView v-if="activePage === 'history'" @open-date="openHistoryDate" />
         <section
+          v-else
           class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5"
         >
           <div
@@ -422,6 +494,9 @@ onUnmounted(() => authSubscription?.unsubscribe())
             />
           </template>
         </section>
+      </div>
+
+      </div>
       </div>
 
       <AddWorkDialog
