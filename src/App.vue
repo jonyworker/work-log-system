@@ -16,6 +16,7 @@ import DayView from './components/DayView.vue'
 import WeekView from './components/WeekView.vue'
 import MonthView from './components/MonthView.vue'
 import WorkHistoryView from './components/WorkHistoryView.vue'
+import ReportsView from './components/ReportsView.vue'
 
 import { useCalendar } from './composables/useCalendar'
 import { useCategoryStore } from './stores/categoryStore'
@@ -112,10 +113,26 @@ const dayStatusOptions = [
     value: 'none',
     label: '無',
   },
-  { value: 'annualLeave', label: '特休' },
-  { value: 'compLeave', label: '補休' },
-  { value: 'personalLeave', label: '事假' },
-  { value: 'sickLeave', label: '病假' },
+  {
+    value: 'holiday',
+    label: '國定假日',
+  },
+  {
+    value: 'annualLeave',
+    label: '特休',
+  },
+  {
+    value: 'compLeave',
+    label: '補休',
+  },
+  {
+    value: 'personalLeave',
+    label: '事假',
+  },
+  {
+    value: 'sickLeave',
+    label: '病假',
+  },
   {
     value: 'makeupWork',
     label: '補班',
@@ -417,8 +434,9 @@ onUnmounted(() => {
         />
 
         <WorkHistoryView v-if="activePage === 'history'" @open-date="openHistoryDate" />
+        <ReportsView v-if="activePage === 'reports'" />
         <section
-          v-else
+          v-if="activePage === 'calendar'"
           class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5"
         >
           <div
