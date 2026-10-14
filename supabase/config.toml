@@ -1,0 +1,4 @@
+# 此函式自行透過 Supabase Auth 驗證使用者 JWT。
+# 適用前端使用 publishable key 的專案。
+[functions.generate-work-report]
+verify_jwt = false

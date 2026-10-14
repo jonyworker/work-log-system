@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { fetchWorkLogs } from '../api/workLogApi'
+import { generateWorkReport } from '../api/reportAiApi'
 import { useCategoryStore } from '../stores/categoryStore'
 
 const categoryStore = useCategoryStore()
@@ -15,6 +16,61 @@ const loading = ref(false)
 const error = ref('')
 const fetched = ref(false)
 const stale = ref(false)
+// AI 內容僅保留於目前頁面，不會覆寫原始 work_logs。
+const aiReport = ref(null)
+const aiLoading = ref(false)
+const aiEditing = ref(false)
+const aiError = ref('')
+const aiUsage = ref(null)
+const aiModel = ref('')
+const aiPeriod = ref(null)
+const aiGeneratedAt = ref('')
+let aiRequestSequence = 0
+function resetAi() {
+  ++aiRequestSequence
+  aiReport.value = null
+  aiUsage.value = null
+  aiModel.value = ''
+  aiPeriod.value = null
+  aiGeneratedAt.value = ''
+  aiError.value = ''
+  aiEditing.value = false
+  aiLoading.value = false
+}
+const aiAvailable = computed(() => fetched.value && !stale.value && !loading.value && !aiLoading.value &&
+  filtered.value.length > 0 && selectedCategory.value === 'all')
+const aiTokenCount = computed(() => aiUsage.value?.total_tokens ?? null)
+const aiApproxCost = computed(() => {
+  // 僅對預設 gpt-5-mini 估價，其他模型不猜測費率。
+  if (!aiModel.value.startsWith('gpt-5-mini') || !aiUsage.value) return null
+  const input = Number(aiUsage.value.input_tokens || 0)
+  const output = Number(aiUsage.value.output_tokens || 0)
+  return (input * 0.25 + output * 2) / 1000000
+})
+async function createAiSummary() {
+  if (!aiAvailable.value) return
+  const seq = ++aiRequestSequence
+  const period = { ...loadedPeriod.value }
+  aiLoading.value = true
+  aiError.value = ''
+  try {
+    const result = await generateWorkReport(period.start, period.end)
+    if (seq !== aiRequestSequence) return
+    aiReport.value = result.report
+    aiUsage.value = result.usage ?? null
+    aiModel.value = result.model ?? ''
+    aiPeriod.value = period
+    aiGeneratedAt.value = new Date().toLocaleString('zh-TW', {hour12:false})
+    aiEditing.value = false
+  } catch (err) {
+    if (seq !== aiRequestSequence) return
+    aiError.value = err?.message || 'AI 產生摘要時發生錯誤。'
+  } finally {
+    if (seq === aiRequestSequence) aiLoading.value = false
+  }
+}
+function handleCategoryChange() { resetAi() }
+
 let requestSequence = 0
 const formatHours = (value) => `${Math.round((Number(value)||0)*100)/100}h`
 const totalHours = (items) => items.reduce((sum,item) => sum + (Number(item.hours)||0),0)
@@ -94,6 +150,7 @@ async function search() {
   try {
     const result = await fetchWorkLogs(startDate.value,endDate.value)
     if (seq !== requestSequence) return
+    resetAi()
     rows.value = result
     fetched.value = true
     loadedPeriod.value = {start: startDate.value, end: endDate.value}
@@ -106,7 +163,7 @@ async function search() {
     if (seq === requestSequence) loading.value = false
   }
 }
-function handleDateChange() {stale.value = true}
+function handleDateChange() {stale.value = true; resetAi()}
 function formatDate(value) {
   const [y,m,d] = value.split('-')
   return `${y}/${m}/${d}`
@@ -118,7 +175,7 @@ onMounted(() => {void search()})
   <div class="wl-report">
     <header class="wl-report-header">
       <div><p class="wl-report-eyebrow">REPORTS / WORK ANALYSIS</p><h1>工作報告</h1><p>用數據回顧工作分布，並保留完整的每日工作內容。</p></div>
-      <span class="wl-report-phase">PHASE 2 · 專案與分類統計</span>
+      <span class="wl-report-phase">PHASE 3 · AI 工作摘要</span>
     </header>
 
     <section class="wl-report-panel wl-report-filters" aria-label="報告查詢條件">
@@ -129,7 +186,7 @@ onMounted(() => {void search()})
       </div>
       <label>開始日期<input v-model="startDate" type="date" @change="handleDateChange" /></label>
       <label>結束日期<input v-model="endDate" type="date" @change="handleDateChange" /></label>
-      <label>工作分類<select v-model="selectedCategory"><option value="all">全部分類</option><option v-for="name in categoryNames" :key="name" :value="name">{{ name }}</option></select></label>
+      <label>工作分類<select v-model="selectedCategory" @change="handleCategoryChange"><option value="all">全部分類</option><option v-for="name in categoryNames" :key="name" :value="name">{{ name }}</option></select></label>
       <button type="button" class="wl-report-search" :disabled="loading" @click="search">{{ loading ? '查詢中…' : '產生報告' }}</button>
     </section>
     <p v-if="error" class="wl-report-error" role="alert">{{ error }}</p>
@@ -147,9 +204,72 @@ onMounted(() => {void search()})
         </div>
       </section>
       <section class="wl-report-panel" aria-label="工作摘要">
-        <div class="wl-report-section-heading"><div><p class="wl-report-eyebrow">02 / SUMMARY</p><h2>工作摘要</h2></div><span>AI 摘要於 Phase 3 啟用</span></div>
+        <div class="wl-report-section-heading"><div><p class="wl-report-eyebrow">02 / SUMMARY</p><h2>工作摘要</h2></div><span>統計摘要＋AI 工作成果</span></div>
         <p v-if="!filtered.length" class="wl-report-muted">目前沒有可整理的工作內容。</p>
-        <template v-else><p class="wl-report-summary">本期間共記錄 {{ filtered.length }} 筆工作，涵蓋 {{ workDays }} 個日期、{{ projectCount }} 個可辨識專案，累計 {{ formatHours(allHours) }}，其中一般工時 {{ formatHours(workHours) }}、加班 {{ formatHours(overtimeHours) }}。</p><p class="wl-report-muted">目前為原始資料統計摘要。後續接入 GPT API 後，這裡會產生可編輯的工作成果與待追蹤事項，不會虛構工作進度。</p></template>
+        <template v-else>
+          <p class="wl-report-summary">本期間共記錄 {{ filtered.length }} 筆工作，涵蓋 {{ workDays }} 個日期、{{ projectCount }} 個可辨識專案，累計 {{ formatHours(allHours) }}，其中一般工時 {{ formatHours(workHours) }}、加班 {{ formatHours(overtimeHours) }}。</p>
+          <div class="wl-report-ai">
+            <div class="wl-report-ai-toolbar">
+              <div><strong>AI 工作成果整理</strong><p class="wl-report-muted">依據原始工作紀錄生成繁體中文摘要，生成後可人工編輯。</p></div>
+              <div class="wl-report-ai-actions">
+                <button type="button" class="wl-report-ai-generate" :disabled="!aiAvailable" @click="createAiSummary">{{ aiLoading ? 'AI 整理中…' : aiReport ? '重新生成摘要' : 'AI 產生摘要' }}</button>
+                <button v-if="aiReport" type="button" class="wl-report-ai-secondary" @click="aiEditing = !aiEditing">{{ aiEditing ? '完成編輯' : '編輯摘要' }}</button>
+              </div>
+            </div>
+            <p v-if="selectedCategory !== 'all'" class="wl-report-notice">目前 AI 只支援「全部分類」的日期區間摘要。請切回全部分類後生成，避免摘要與統計範圍不一致。</p>
+            <p v-if="stale" class="wl-report-notice">日期尚未重新查詢，請先按「產生報告」。</p>
+            <p v-if="aiError" class="wl-report-error" role="alert">{{ aiError }}</p>
+            <p v-if="aiLoading" class="wl-report-muted" role="status">正在依據工作紀錄整理成果，請稍候…</p>
+            <div v-if="aiReport" class="wl-report-ai-sections">
+              <section class="wl-report-ai-section">
+                <h3>01 / 本期工作概況</h3>
+                <textarea v-if="aiEditing" v-model="aiReport.overview" class="wl-report-ai-editor" rows="4" aria-label="編輯本期工作概況" />
+                <p v-else class="wl-report-ai-output">{{ aiReport.overview }}</p>
+              </section>
+              <section class="wl-report-ai-section">
+                <h3>02 / 各專案工作成果</h3>
+                <div v-for="(item, index) in aiReport.projectHighlights" :key="index" class="wl-report-ai-entry">
+                  <template v-if="aiEditing">
+                    <label>專案名稱<input v-model="item.project" class="wl-report-ai-input" /></label>
+                    <label>成果描述<textarea v-model="item.result" class="wl-report-ai-editor" rows="3" /></label>
+                  </template>
+                  <template v-else><h4>{{ item.project }}</h4><p>{{ item.result }}</p></template>
+                </div>
+                <p v-if="!aiReport.projectHighlights.length" class="wl-report-muted">本期無可確認的專案成果。</p>
+              </section>
+              <section class="wl-report-ai-section">
+                <h3>03 / 重要決議</h3>
+                <div v-for="(item, index) in aiReport.decisions" :key="index" class="wl-report-ai-entry">
+                  <textarea v-if="aiEditing" v-model="aiReport.decisions[index]" class="wl-report-ai-editor" rows="2" :aria-label="`編輯重要決議 ${index+1}`" />
+                  <p v-else>{{ item }}</p>
+                </div>
+                <p v-if="!aiReport.decisions.length" class="wl-report-muted">原始紀錄未提及明確決議。</p>
+              </section>
+              <section class="wl-report-ai-section">
+                <h3>04 / 待追蹤事項</h3>
+                <div v-for="(item, index) in aiReport.followUps" :key="index" class="wl-report-ai-entry">
+                  <template v-if="aiEditing">
+                    <label>事項<input v-model="item.task" class="wl-report-ai-input" /></label>
+                    <label>後續處理<textarea v-model="item.nextStep" class="wl-report-ai-editor" rows="2" /></label>
+                    <label>期限（未提及請留白）<input v-model="item.dueDate" class="wl-report-ai-input" /></label>
+                  </template>
+                  <template v-else>
+                    <h4>{{ item.task }} <span v-if="item.dueDate" class="wl-report-ai-due">{{ item.dueDate }}</span></h4>
+                    <p>{{ item.nextStep }}</p>
+                  </template>
+                </div>
+                <p v-if="!aiReport.followUps.length" class="wl-report-muted">原始紀錄未提及待追蹤事項。</p>
+              </section>
+            </div>
+            <p v-else-if="!aiLoading" class="wl-report-muted">尚未產生 AI 摘要。點選「AI 產生摘要」後才會呼叫 OpenAI API，並產生費用。</p>
+            <div v-if="aiReport" class="wl-report-ai-meta">
+              <span>生成時間：{{ aiGeneratedAt }}</span>
+              <span v-if="aiTokenCount !== null">Token 用量：{{ aiTokenCount.toLocaleString() }}</span>
+              <span v-if="aiApproxCost !== null">估計費用：US${{ aiApproxCost.toFixed(5) }}</span>
+            </div>
+            <p v-if="aiReport" class="wl-report-muted wl-report-ai-hint">文字修改僅保留於目前頁面，重新查詢或重新整理網頁後會清除。費用是依模型公告單價估算，不等於正式帳單。</p>
+          </div>
+        </template>
       </section>
       <details class="wl-report-panel wl-report-collapsible" aria-label="專案工時統計">
         <summary class="wl-report-collapse-heading">
@@ -278,6 +398,19 @@ onMounted(() => {void search()})
 .wl-report-empty{color:#8492a5;text-align:center;padding:30px;font-size:13px}
 .wl-report-error,.wl-report-notice{padding:12px 15px;border-radius:9px;font-size:13px;background:#fff1f1;color:#b03737}
 .wl-report-notice{background:#fff8e8;color:#8c681d}
+.wl-report-ai{margin-top:20px;padding:18px;border:1px solid #e2e9f1;border-radius:12px;background:#fafcff}
+.wl-report-ai-toolbar{display:flex;align-items:start;justify-content:space-between;gap:15px;flex-wrap:wrap}
+.wl-report-ai-toolbar strong{font-size:14px}
+.wl-report-ai-toolbar p{margin:5px 0 0}
+.wl-report-ai-actions{display:flex;gap:8px;flex-wrap:wrap}
+.wl-report-ai-actions button{border-radius:9px;padding:10px 14px;min-height:38px;font-size:12px;font-weight:650;cursor:pointer}
+.wl-report-ai-generate{background:#25354d;border:1px solid #25354d;color:white}
+.wl-report-ai-secondary{background:#fff;border:1px solid #ccd7e5;color:#334968}
+.wl-report-ai-actions button:disabled{opacity:.48;cursor:not-allowed}
+.wl-report-ai-output{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;line-height:1.95;color:#30445e;margin:16px 0}
+.wl-report-ai-sections{display:grid;gap:20px;margin-top:18px}.wl-report-ai-section{border-top:1px solid #e2e9f1;padding-top:16px}.wl-report-ai-section h3{font-size:14px;margin:0 0 10px;font-weight:750;color:#263951}.wl-report-ai-entry{padding:10px 0;border-bottom:1px solid #edf0f5}.wl-report-ai-entry:last-child{border-bottom:0}.wl-report-ai-entry h4{margin:0 0 5px;font-size:13px;color:#263951}.wl-report-ai-entry p{white-space:pre-wrap;margin:0;font-size:13px;line-height:1.8;color:#40536d}.wl-report-ai-due{font-weight:500;color:#7d6170;font-size:12px;margin-left:7px}.wl-report-ai-entry label{display:block;font-size:12px;margin:8px 0;color:#627994}.wl-report-ai-input{box-sizing:border-box;width:100%;padding:9px;border:1px solid #c7d4e6;border-radius:8px;font:inherit;color:#30445e}.wl-report-ai-editor{box-sizing:border-box;display:block;width:100%;min-height:85px;margin-top:15px;padding:14px;border:1px solid #c7d4e6;border-radius:9px;resize:vertical;font-family:inherit;font-size:13px;line-height:1.85;color:#30445e}
+.wl-report-ai-meta{display:flex;gap:8px 16px;flex-wrap:wrap;font-size:11px;color:#627994;border-top:1px solid #e5ebf2;padding-top:12px;margin-top:15px}
+.wl-report-ai-hint{font-size:11px;margin-bottom:0}
 @media(max-width:850px){.wl-report-kpis{grid-template-columns:repeat(3,1fr);gap:16px}.wl-report-kpis>div{padding:5px 12px!important;border-left:0}}
 @media(max-width:540px){.wl-report-panel{padding:16px}.wl-report-collapsible{padding:0}.wl-report-collapse-heading{padding:16px;gap:10px;flex-wrap:wrap}.wl-report-collapse-meta{order:3;width:100%;text-align:left}.wl-report-collapse-content{padding:0 16px 16px}.wl-report-filters label{min-width:calc(50% - 8px)}.wl-report-kpis{grid-template-columns:repeat(2,1fr)}.wl-report-kpis strong{font-size:23px}.wl-report-search{width:100%}}
 </style>
