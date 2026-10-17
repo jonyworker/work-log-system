@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useCategoryStore } from '../stores/categoryStore'
 import DayStatusBadge from './DayStatusBadge.vue'
 
@@ -12,6 +12,18 @@ const props = defineProps({
 const emit = defineEmits(['select-date'])
 const categoryStore = useCategoryStore()
 const previewDate = ref(props.selectedDate)
+// 實心圓圈只標示真實的今天，不跟隨選取日期或滑鼠預覽移動。
+function getLocalToday() {
+  const date = new Date()
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+const todayDate = ref(getLocalToday())
+// 只用 todayDate 控制今天的圓形標記；previewDate / selectedDate 不參與判斷。
+const isToday = (date) => date === todayDate.value
+let todayTimer = null
 let hoverTimer = null
 
 const weekLabels = ['週一', '週二', '週三', '週四', '週五', '週六', '週日']
@@ -98,7 +110,14 @@ watch(() => props.days.map((day) => day.date).join('|'), () => {
     previewDate.value = props.days.find((day) => day.inCurrentMonth)?.date || props.selectedDate
   }
 })
-onBeforeUnmount(clearHoverTimer)
+onMounted(() => {
+  // 若月曆跨午夜持續開啟，也會更新「今天」標示。
+  todayTimer = setInterval(() => { todayDate.value = getLocalToday() }, 60 * 1000)
+})
+onBeforeUnmount(() => {
+  clearHoverTimer()
+  if (todayTimer !== null) clearInterval(todayTimer)
+})
 </script>
 
 <template>
@@ -116,7 +135,7 @@ onBeforeUnmount(clearHoverTimer)
             :class="{
               'wl-month-cell--outside': !day.inCurrentMonth,
               'wl-month-cell--preview': previewDay?.date === day.date,
-              'wl-month-cell--today': selectedDate === day.date,
+              'wl-month-cell--today': isToday(day.date),
             }"
             @mouseenter="queuePreview(day.date)"
             @mouseleave="clearHoverTimer"
@@ -125,7 +144,10 @@ onBeforeUnmount(clearHoverTimer)
               type="button"
               class="wl-month-date-button"
               :aria-label="`${day.date}，工作 ${day.workHours} 小時，加班 ${day.overtimeHours} 小時，${day.items.length} 筆紀錄`"
-              :aria-current="selectedDate === day.date ? 'date' : undefined"
+              :aria-current="isToday(day.date) ? 'date' : undefined"
+              :data-calendar-date="day.date"
+              :data-today="isToday(day.date) ? 'true' : undefined"
+              :title="isToday(day.date) ? '今天' : undefined"
               @focus="showPreview(day.date)"
               @click="onDateClick(day.date, $event)"
             >

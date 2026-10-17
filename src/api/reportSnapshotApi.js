@@ -47,3 +47,12 @@ export async function listSavedWorkReportsByRange(startDate, endDate) {
   if (error) throw new Error(`搜尋報告紀錄失敗：${error.message}`)
   return data || []
 }
+
+// 僅刪除指定 ID 的單一報告快照；由 RLS 限制只能刪除自己的資料。
+export async function deleteSavedWorkReportSnapshot(id) {
+  if (!id || typeof id !== 'string') throw new Error('請先選擇要刪除的報告。')
+  const { data, error } = await table().delete().eq('id', id).select('id')
+  if (error) throw new Error(`刪除工作報告失敗：${error.message}`)
+  if (!data?.some(item => item.id === id)) throw new Error('報告不存在或沒有刪除權限，請重新搜尋。')
+  return true
+}

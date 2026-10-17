@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { fetchWorkLogs } from '../api/workLogApi'
 import { generateWorkReport } from '../api/reportAiApi'
 import { saveWorkReportSnapshot } from '../api/reportSnapshotApi'
@@ -11,6 +11,7 @@ const today = new Date()
 const startDate = ref(dateString(new Date(today.getFullYear(), today.getMonth(), 1)))
 const endDate = ref(dateString(today))
 const selectedCategory = ref('all')
+const periodMode = ref('month')
 const loadedPeriod = ref({start: '', end: ''})
 const rows = ref([])
 const loading = ref(false)
@@ -27,7 +28,14 @@ const aiPeriod = ref(null)
 const aiGeneratedAt = ref('')
 const snapshotsError = ref('')
 const snapshotSaving = ref(false)
-const reportTitle = ref('工作報告')
+// 報告名稱預設由查詢區間產生，使用者仍可直接修改。
+const formatReportTitle = (start, end) => start && end
+  ? `${start.replaceAll('-', '/')} - ${end.replaceAll('-', '/')} 工作報告`
+  : '工作報告'
+const reportTitle = ref(formatReportTitle(startDate.value, endDate.value))
+watch([startDate, endDate], ([start, end]) => {
+  reportTitle.value = formatReportTitle(start, end)
+})
 const snapshotNotice = ref('')
 const savedReportLabel = '目前查詢資料'
 function snapshotStats() {
@@ -166,20 +174,46 @@ function categoryStyle(name) {
   const category = categoryStore.getCategory(name)
   return {backgroundColor:category?.bgColor || '#edf2f7',color:category?.textColor || '#48576b'}
 }
-function applyPeriod(period) {
-  const date = new Date()
-  endDate.value = dateString(date)
-  if (period === 'week') {
-    const day = (date.getDay()+6)%7
-    date.setDate(date.getDate()-day)
-    startDate.value = dateString(date)
-  } else if (period === 'month') {
-    startDate.value = dateString(new Date(date.getFullYear(),date.getMonth(),1))
-  } else {
-    startDate.value = dateString(new Date(date.getFullYear(),0,1))
+// 以目前選取的日期作為切換基準，避免每次點擊都跳回今天。
+// 採週一至週日為一週，月份使用完整的第一日至最後一日。
+function getPeriodBounds(mode, anchor) {
+  const date = new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate())
+  if (mode === 'day') {
+    const value = dateString(date)
+    return { start: value, end: value }
   }
+  if (mode === 'week') {
+    const diff = (date.getDay() + 6) % 7
+    const first = new Date(date.getFullYear(), date.getMonth(), date.getDate() - diff)
+    const last = new Date(first.getFullYear(), first.getMonth(), first.getDate() + 6)
+    return { start: dateString(first), end: dateString(last) }
+  }
+  return {
+    start: dateString(new Date(date.getFullYear(), date.getMonth(), 1)),
+    end: dateString(new Date(date.getFullYear(), date.getMonth() + 1, 0)),
+  }
+}
+function selectPeriod(mode) {
+  periodMode.value = mode
+  const current = startDate.value ? new Date(`${startDate.value}T12:00:00`) : new Date()
+  const anchor = Number.isNaN(current.getTime()) ? new Date() : current
+  const next = getPeriodBounds(mode, anchor)
+  startDate.value = next.start
+  endDate.value = next.end
   clearCurrentReport()
 }
+function stepPeriod(direction) {
+  const current = startDate.value ? new Date(`${startDate.value}T12:00:00`) : new Date()
+  const anchor = Number.isNaN(current.getTime()) ? new Date() : current
+  if (periodMode.value === 'day') anchor.setDate(anchor.getDate() + direction)
+  else if (periodMode.value === 'week') anchor.setDate(anchor.getDate() + direction * 7)
+  else anchor.setMonth(anchor.getMonth() + direction)
+  const next = getPeriodBounds(periodMode.value, anchor)
+  startDate.value = next.start
+  endDate.value = next.end
+  clearCurrentReport()
+}
+const periodModeName = computed(() => ({ day: '日', week: '週', month: '月' })[periodMode.value])
 async function search() {
   error.value = ''
   if (!startDate.value || !endDate.value || startDate.value > endDate.value) {
@@ -237,10 +271,18 @@ function formatDate(value) {
     </header>
 
     <section class="wl-report-panel wl-report-filters" aria-label="報告查詢條件">
-      <div class="wl-report-periods">
-        <button type="button" @click="applyPeriod('week')">本週</button>
-        <button type="button" @click="applyPeriod('month')">本月</button>
-        <button type="button" @click="applyPeriod('year')">今年</button>
+      <div class="wl-report-period-controls">
+        <div class="wl-report-periods" role="group" aria-label="報告日期模式">
+          <button v-for="mode in [{ key: 'day', label: '日' }, { key: 'week', label: '週' }, { key: 'month', label: '月' }]"
+                  :key="mode.key" type="button"
+                  :class="{ 'is-active': periodMode === mode.key }"
+                  :aria-pressed="periodMode === mode.key"
+                  @click="selectPeriod(mode.key)">{{ mode.label }}</button>
+        </div>
+        <div class="wl-report-period-navigation" role="group" aria-label="切換查詢期間">
+          <button type="button" @click="stepPeriod(-1)">← 上一{{ periodModeName }}</button>
+          <button type="button" @click="stepPeriod(1)">下一{{ periodModeName }} →</button>
+        </div>
       </div>
       <label>開始日期<input v-model="startDate" type="date" @change="handleDateChange" /></label>
       <label>結束日期<input v-model="endDate" type="date" @change="handleDateChange" /></label>
@@ -273,7 +315,13 @@ function formatDate(value) {
       <section class="wl-report-panel" aria-label="工作摘要">
         <div class="wl-report-section-heading wl-report-summary-heading">
           <div><p class="wl-report-eyebrow">02 / SUMMARY</p><h2>工作摘要</h2></div>
-          <button type="button" class="wl-report-search wl-report-save-header" :disabled="!aiReport || snapshotSaving || aiLoading || stale || selectedCategory !== 'all'" :title="!aiReport ? '請先產生 AI 摘要後再儲存' : '儲存工作報告'" @click="saveSnapshot">{{ snapshotSaving ? '儲存中…' : '儲存報告' }}</button>
+          <div class="wl-report-summary-save-actions">
+            <label class="wl-report-title-field" for="wl-report-title">
+              <span>報告名稱</span>
+              <input id="wl-report-title" v-model="reportTitle" maxlength="160" placeholder="請輸入報告名稱" autocomplete="off" />
+            </label>
+            <button type="button" class="wl-report-search wl-report-save-header" :disabled="!aiReport || snapshotSaving || aiLoading || stale || selectedCategory !== 'all' || !reportTitle.trim()" :title="!aiReport ? '請先產生 AI 摘要後再儲存' : '儲存工作報告'" @click="saveSnapshot">{{ snapshotSaving ? '儲存中…' : '儲存報告' }}</button>
+          </div>
         </div>
         <p v-if="!filtered.length" class="wl-report-muted">目前沒有可整理的工作內容。</p>
         <template v-else>
@@ -323,13 +371,9 @@ function formatDate(value) {
               <span v-if="aiTokenCount !== null">Token 用量：{{ aiTokenCount.toLocaleString() }}</span>
               <span v-if="aiApproxCost !== null">估計費用：US${{ aiApproxCost.toFixed(5) }}</span>
             </div>
-            <div v-if="aiReport" class="wl-report-inline-save" aria-label="報告儲存設定">
-              <div class="wl-report-snapshot-toolbar">
-                <label>報告名稱<input v-model="reportTitle" maxlength="160" placeholder="例如：十月份上半月工作報告" /></label>
-              </div>
+            <div v-if="snapshotNotice || snapshotsError" class="wl-report-save-feedback" aria-live="polite">
               <p v-if="snapshotNotice" class="wl-report-snapshot-info" role="status">{{ snapshotNotice }}</p>
               <p v-if="snapshotsError" class="wl-report-error" role="alert">{{ snapshotsError }}</p>
-              <p class="wl-report-muted">完成 AI 摘要後，可使用工作摘要右上角的「儲存報告」保存快照；編輯請至「報告紀錄」。</p>
             </div>
           </div>
         </template>
@@ -420,9 +464,14 @@ function formatDate(value) {
 .wl-report-filters{display:flex;gap:13px;align-items:end;flex-wrap:wrap}
 .wl-report-filters label{display:grid;gap:7px;font-size:12px;font-weight:650;color:#5e728d;min-width:140px;flex:1}
 .wl-report-filters input,.wl-report-filters select{border:1px solid #d5deea;border-radius:9px;padding:10px 11px;background:#fff;color:#223149;min-height:42px;max-width:100%;font-size:13px}
+.wl-report-period-controls{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
 .wl-report-periods{display:flex;gap:4px;padding:4px;background:#f1f4f8;border-radius:10px}
 .wl-report-periods button{border:0;background:transparent;border-radius:7px;padding:9px 12px;font-size:13px;color:#425773;cursor:pointer}
 .wl-report-periods button:hover{background:#fff}
+.wl-report-periods button.is-active{background:#fff;color:#1f2b3e;font-weight:750;box-shadow:0 1px 4px #172c4820}
+.wl-report-period-navigation{display:flex;gap:7px}
+.wl-report-period-navigation button{border:1px solid #d5deea;background:#fff;color:#334968;border-radius:9px;min-height:42px;padding:8px 10px;font-size:12px;white-space:nowrap;cursor:pointer}
+.wl-report-period-navigation button:hover{background:#f5f8fc;border-color:#9fb1cd}
 .wl-report-search{background:#25354d;color:#fff;border:0;border-radius:9px;padding:11px 17px;min-height:42px;font-size:13px;font-weight:650;cursor:pointer}
 .wl-report-search:disabled{opacity:.55;cursor:wait}
 .wl-report-section-heading{align-items:end;padding-bottom:19px;border-bottom:1px solid #e5ebf2;margin-bottom:21px}
@@ -475,7 +524,14 @@ function formatDate(value) {
 .wl-report-ai-sections{display:grid;gap:20px;margin-top:18px}.wl-report-ai-section{border-top:1px solid #e2e9f1;padding-top:16px}.wl-report-ai-section h3{font-size:14px;margin:0 0 10px;font-weight:750;color:#263951}.wl-report-ai-entry{padding:10px 0;border-bottom:1px solid #edf0f5}.wl-report-ai-entry:last-child{border-bottom:0}.wl-report-ai-entry h4{margin:0 0 5px;font-size:13px;color:#263951}.wl-report-ai-entry p{white-space:pre-wrap;margin:0;font-size:13px;line-height:1.8;color:#40536d}.wl-report-ai-due{font-weight:500;color:#7d6170;font-size:12px;margin-left:7px}.wl-report-ai-entry label{display:block;font-size:12px;margin:8px 0;color:#627994}.wl-report-ai-input{box-sizing:border-box;width:100%;padding:9px;border:1px solid #c7d4e6;border-radius:8px;font:inherit;color:#30445e}.wl-report-ai-editor{box-sizing:border-box;display:block;width:100%;min-height:85px;margin-top:15px;padding:14px;border:1px solid #c7d4e6;border-radius:9px;resize:vertical;font-family:inherit;font-size:13px;line-height:1.85;color:#30445e}
 .wl-report-ai-meta{display:flex;gap:8px 16px;flex-wrap:wrap;font-size:11px;color:#627994;border-top:1px solid #e5ebf2;padding-top:12px;margin-top:15px}
 .wl-report-ai-hint{font-size:11px;margin-bottom:0}
-.wl-report-summary-heading{gap:12px;flex-wrap:wrap}.wl-report-save-header{white-space:nowrap;min-width:96px}.wl-report-save-header:disabled{opacity:.48;cursor:not-allowed}.wl-report-inline-save{display:grid;gap:12px;margin-top:18px;border-top:1px solid #dfe6ef;padding-top:18px}.wl-report-inline-save-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}.wl-report-inline-save-head strong{font-size:14px}.wl-report-inline-save-head span{font-size:12px;color:#8795a8}.wl-report-snapshot-panel{display:grid;gap:12px}.wl-report-snapshot-panel .wl-report-section-heading{margin-bottom:0}.wl-report-snapshot-toolbar{display:flex;align-items:end;flex-wrap:wrap;gap:12px}.wl-report-snapshot-toolbar label{display:grid;gap:6px;flex:1;font-size:12px;color:#61738d;font-weight:650;min-width:210px}.wl-report-snapshot-toolbar input{min-height:42px;border:1px solid #d5deea;border-radius:9px;padding:9px 12px;font-size:13px;width:100%;box-sizing:border-box}.wl-report-snapshot-toolbar button:disabled{opacity:.48;cursor:not-allowed}.wl-report-snapshot-history{display:grid;gap:8px}.wl-report-snapshot-item{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 14px;border:1px solid #e0e7ef;border-radius:9px;background:#fff;color:#30445e;cursor:pointer;text-align:left}.wl-report-snapshot-item:hover{background:#f3f7fb}.wl-report-snapshot-item:disabled{opacity:.5;cursor:wait}.wl-report-snapshot-item span:first-child{display:grid;gap:5px}.wl-report-snapshot-item strong{font-size:13px}.wl-report-snapshot-item small,.wl-report-snapshot-item span:last-child{font-size:11px;color:#788ba4}.wl-report-snapshot-info{font-size:13px;color:#3b6d62;background:#eaf6f1;border-radius:8px;padding:11px 12px}
+.wl-report-summary-heading{display:flex;align-items:center;justify-content:space-between;gap:18px;flex-wrap:wrap}
+.wl-report-summary-save-actions{display:flex;align-items:end;gap:10px;flex:1;justify-content:flex-end;min-width:0}
+.wl-report-title-field{display:grid;gap:5px;min-width:220px;max-width:390px;flex:1;color:#647791;font-size:11px;font-weight:650}
+.wl-report-title-field input{box-sizing:border-box;width:100%;min-height:42px;border:1px solid #d5deea;border-radius:9px;padding:9px 12px;background:#fff;color:#25354d;font-family:inherit;font-size:13px}
+.wl-report-title-field input:focus-visible{outline:2px solid #7798c7;outline-offset:1px}
+.wl-report-save-feedback{margin-top:15px}
+.wl-report-save-feedback p{margin:0}
+.wl-report-save-header{white-space:nowrap;min-width:96px}.wl-report-save-header:disabled{opacity:.48;cursor:not-allowed}.wl-report-inline-save{display:grid;gap:12px;margin-top:18px;border-top:1px solid #dfe6ef;padding-top:18px}.wl-report-inline-save-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}.wl-report-inline-save-head strong{font-size:14px}.wl-report-inline-save-head span{font-size:12px;color:#8795a8}.wl-report-snapshot-panel{display:grid;gap:12px}.wl-report-snapshot-panel .wl-report-section-heading{margin-bottom:0}.wl-report-snapshot-toolbar{display:flex;align-items:end;flex-wrap:wrap;gap:12px}.wl-report-snapshot-toolbar label{display:grid;gap:6px;flex:1;font-size:12px;color:#61738d;font-weight:650;min-width:210px}.wl-report-snapshot-toolbar input{min-height:42px;border:1px solid #d5deea;border-radius:9px;padding:9px 12px;font-size:13px;width:100%;box-sizing:border-box}.wl-report-snapshot-toolbar button:disabled{opacity:.48;cursor:not-allowed}.wl-report-snapshot-history{display:grid;gap:8px}.wl-report-snapshot-item{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 14px;border:1px solid #e0e7ef;border-radius:9px;background:#fff;color:#30445e;cursor:pointer;text-align:left}.wl-report-snapshot-item:hover{background:#f3f7fb}.wl-report-snapshot-item:disabled{opacity:.5;cursor:wait}.wl-report-snapshot-item span:first-child{display:grid;gap:5px}.wl-report-snapshot-item strong{font-size:13px}.wl-report-snapshot-item small,.wl-report-snapshot-item span:last-child{font-size:11px;color:#788ba4}.wl-report-snapshot-info{font-size:13px;color:#3b6d62;background:#eaf6f1;border-radius:8px;padding:11px 12px}
 @media(max-width:850px){.wl-report-kpis{grid-template-columns:repeat(3,1fr);gap:16px}.wl-report-kpis>div{padding:5px 12px!important;border-left:0}}
-@media(max-width:540px){.wl-report-panel{padding:16px}.wl-report-collapsible{padding:0}.wl-report-collapse-heading{padding:16px;gap:10px;flex-wrap:wrap}.wl-report-collapse-meta{order:3;width:100%;text-align:left}.wl-report-collapse-content{padding:0 16px 16px}.wl-report-filters label{min-width:calc(50% - 8px)}.wl-report-kpis{grid-template-columns:repeat(2,1fr)}.wl-report-kpis strong{font-size:23px}.wl-report-search{width:100%}}
+@media(max-width:540px){.wl-report-summary-save-actions{width:100%;justify-content:stretch}.wl-report-title-field{min-width:0;max-width:none}.wl-report-save-header{min-width:auto}.wl-report-period-controls{width:100%;justify-content:space-between}.wl-report-period-navigation button{padding:8px}.wl-report-panel{padding:16px}.wl-report-collapsible{padding:0}.wl-report-collapse-heading{padding:16px;gap:10px;flex-wrap:wrap}.wl-report-collapse-meta{order:3;width:100%;text-align:left}.wl-report-collapse-content{padding:0 16px 16px}.wl-report-filters label{min-width:calc(50% - 8px)}.wl-report-kpis{grid-template-columns:repeat(2,1fr)}.wl-report-kpis strong{font-size:23px}.wl-report-search{width:100%}}
 </style>

@@ -1,12 +1,14 @@
 <script setup>
-import { computed, ref } from 'vue'
-import { getSavedWorkReport, listSavedWorkReportsByRange, saveWorkReportSnapshot } from '../api/reportSnapshotApi'
+import { computed, onMounted, ref } from 'vue'
+import { getSavedWorkReport, listSavedWorkReportsByRange, saveWorkReportSnapshot, deleteSavedWorkReportSnapshot } from '../api/reportSnapshotApi'
 import { printSavedReport, downloadSavedReportDocx, EXPORT_SECTIONS } from '../api/reportExport'
 
 const allReports = ref([])
 const loadingList = ref(false)
 const loadingReport = ref(false)
 const saving = ref(false)
+const deleting = ref(false)
+const pendingDelete = ref(null)
 const exportingWord = ref(false)
 const exportDialog = ref(false)
 const exportType = ref('pdf')
@@ -44,6 +46,32 @@ const keyword = ref('')
 const startDate = ref('')
 const endDate = ref('')
 const searchedPeriod = ref(null)
+const now = new Date()
+const visibleYear = ref(now.getFullYear())
+const visibleMonth = ref(now.getMonth())
+const advancedOpen = ref(false)
+const advancedMode = ref(false)
+const weekdays = ['一', '二', '三', '四', '五', '六', '日']
+const pad = num => String(num).padStart(2, '0')
+const isoLocal = (year, month, date) => `${year}-${pad(month + 1)}-${pad(date)}`
+const monthStart = computed(() => isoLocal(visibleYear.value, visibleMonth.value, 1))
+const monthEnd = computed(() => isoLocal(visibleYear.value, visibleMonth.value, new Date(visibleYear.value, visibleMonth.value + 1, 0).getDate()))
+const monthTitle = computed(() => `${visibleYear.value} 年 ${visibleMonth.value + 1} 月`)
+const todayKey = isoLocal(now.getFullYear(), now.getMonth(), now.getDate())
+const calendarDays = computed(() => {
+  const firstWeekday = (new Date(visibleYear.value, visibleMonth.value, 1).getDay() + 6) % 7
+  const total = new Date(visibleYear.value, visibleMonth.value + 1, 0).getDate()
+  return Array.from({ length: Math.ceil((firstWeekday + total) / 7) * 7 }, (_, idx) => {
+    const date = idx - firstWeekday + 1
+    return date >= 1 && date <= total ? { day: date, key: isoLocal(visibleYear.value, visibleMonth.value, date) } : null
+  })
+})
+const selectedPeriod = computed(() => selected.value ? { start: selected.value.start_date, end: selected.value.end_date } : null)
+const dateIsHighlighted = key => !!selectedPeriod.value && key >= selectedPeriod.value.start && key <= selectedPeriod.value.end
+const dateIsPeriodStart = key => selectedPeriod.value?.start === key
+const dateIsPeriodEnd = key => selectedPeriod.value?.end === key
+const monthHasReports = computed(() => allReports.value.length > 0)
+
 let searchSeq = 0
 const selected = ref(null)
 const editing = ref(false)
@@ -78,6 +106,7 @@ function clearResults() {
   allReports.value = []
   selected.value = null
   exportDialog.value = false
+  pendingDelete.value = null
   editing.value = false
   draft.value = null
   notice.value = ''
@@ -85,19 +114,21 @@ function clearResults() {
   loadingList.value = false
   loadingReport.value = false
 }
-async function reload() {
-  if (!startDate.value || !endDate.value || startDate.value > endDate.value) {
+async function reload(monthOnly = false) {
+  if (!monthOnly && (!startDate.value || !endDate.value || startDate.value > endDate.value)) {
     clearResults()
     error.value = '請選擇有效的開始日期與結束日期。'
     return
   }
   const seq = ++searchSeq
-  const period = { start: startDate.value, end: endDate.value }
+  ++loadSeq
+  const period = monthOnly ? { start: monthStart.value, end: monthEnd.value } : { start: startDate.value, end: endDate.value }
   loadingList.value = true
   error.value = ''
   notice.value = ''
   selected.value = null
   exportDialog.value = false
+  pendingDelete.value = null
   editing.value = false
   allReports.value = []
   searchedPeriod.value = null
@@ -112,8 +143,26 @@ async function reload() {
     if (seq === searchSeq) loadingList.value = false
   }
 }
+function moveMonth(offset) {
+  const target = new Date(visibleYear.value, visibleMonth.value + offset, 1)
+  visibleYear.value = target.getFullYear()
+  visibleMonth.value = target.getMonth()
+  advancedMode.value = false
+  void reload(true)
+}
+function goCurrentMonth() {
+  visibleYear.value = now.getFullYear()
+  visibleMonth.value = now.getMonth()
+  advancedMode.value = false
+  void reload(true)
+}
+function searchAdvanced() {
+  advancedMode.value = true
+  return reload(false)
+}
+onMounted(() => { void reload(true) })
 async function openReport(id) {
-  if (loadingReport.value || saving.value) return
+  if (loadingReport.value || saving.value || deleting.value) return
   const seq = ++loadSeq
   loadingReport.value = true
   error.value = ''
@@ -131,6 +180,44 @@ async function openReport(id) {
     expandedCategories.value = false
   } catch (err) { if (seq === loadSeq) error.value = err?.message || '開啟報告失敗。' }
   finally { if (seq === loadSeq) loadingReport.value = false }
+}
+
+function requestDelete() {
+  if (!selected.value || editing.value || saving.value || deleting.value || exporting.value) return
+  error.value = ''
+  notice.value = ''
+  pendingDelete.value = {
+    id: selected.value.id,
+    title: selected.value.title,
+    startDate: selected.value.start_date,
+    endDate: selected.value.end_date,
+  }
+}
+function cancelDelete() {
+  if (!deleting.value) pendingDelete.value = null
+}
+async function confirmDelete() {
+  const item = pendingDelete.value
+  if (!item || deleting.value || saving.value || loadingReport.value) return
+  deleting.value = true
+  error.value = ''
+  notice.value = ''
+  try {
+    await deleteSavedWorkReportSnapshot(item.id)
+    // 清除目前開啟的報告，不會觸碰工作紀錄或其他版本。
+    ++loadSeq
+    if (selected.value?.id === item.id) selected.value = null
+    draft.value = null
+    editing.value = false
+    exportDialog.value = false
+    allReports.value = allReports.value.filter(report => report.id !== item.id)
+    pendingDelete.value = null
+    notice.value = `已刪除「${item.title}」的這一個儲存版本，其他報告及原始工作紀錄均未變動。`
+  } catch (err) {
+    error.value = err?.message || '刪除報告失敗，請稍後重試。'
+  } finally {
+    deleting.value = false
+  }
 }
 function exportPdf(sections) {
   if (!selected.value || editing.value) return
@@ -197,35 +284,61 @@ async function openReportAfterSave(id) {
 <template>
   <div class="records-page">
     <header class="records-header"><div><p class="eyebrow">REPORT ARCHIVE</p><h1>報告紀錄</h1><p>查閱已儲存報告，並在這裡編輯與另存新版本。</p></div></header>
-    <section class="records-panel">
-      <div class="records-toolbar"><h2>搜尋已儲存報告</h2></div>
-      <form class="records-search-form" @submit.prevent="reload">
-        <label class="records-field">開始日期<input v-model="startDate" type="date" class="records-input" @change="clearResults" /></label>
-        <label class="records-field">結束日期<input v-model="endDate" type="date" class="records-input" @change="clearResults" /></label>
-        <button type="submit" class="records-search-button" :disabled="loadingList || !startDate || !endDate || startDate > endDate">{{ loadingList ? '搜尋中…' : '搜尋報告' }}</button>
-      </form>
-      <template v-if="searchedPeriod">
-        <div class="records-toolbar"><h2>搜尋結果</h2><span class="records-muted">{{ fmtDate(searchedPeriod.start) }} ～ {{ fmtDate(searchedPeriod.end) }} · 共 {{ matches.length }} 份</span></div>
-        <input v-model="keyword" class="records-input" type="search" placeholder="進一步篩選報告名稱" aria-label="篩選搜尋結果" />
-        <div v-if="!matches.length" class="records-muted">這段期間沒有符合條件的已儲存報告。</div>
+    <div class="records-columns">
+      <aside class="records-navigation records-panel" aria-label="報告月曆與清單">
+        <div class="records-toolbar"><div><p class="eyebrow">CALENDAR</p><h2>報告月曆</h2></div><button type="button" class="records-today-button" @click="goCurrentMonth">本月</button></div>
+        <div class="records-calendar-toolbar">
+          <button type="button" aria-label="上個月" @click="moveMonth(-1)">‹</button>
+          <strong>{{ monthTitle }}</strong>
+          <button type="button" aria-label="下個月" @click="moveMonth(1)">›</button>
+        </div>
+        <div class="records-calendar-grid" role="grid" :aria-label="`${monthTitle}報告日期`">
+          <span v-for="weekday in weekdays" :key="weekday" class="records-calendar-weekday">{{ weekday }}</span>
+          <div v-for="(cell, idx) in calendarDays" :key="cell?.key || `empty-${idx}`" class="records-calendar-cell" :class="{
+            'has-date': !!cell,
+            'is-selected-range': cell && dateIsHighlighted(cell.key),
+            'is-range-start': cell && dateIsPeriodStart(cell.key),
+            'is-range-end': cell && dateIsPeriodEnd(cell.key),
+            'is-today': cell?.key === todayKey,
+          }">
+            <span v-if="cell" :title="cell.key" class="records-calendar-day">{{ cell.day }}</span>
+          </div>
+        </div>
+        <p class="records-muted records-calendar-help">選取下方報告後，月曆才會標示該報告涵蓋的日期；跨月部分只顯示當月份。</p>
+        <div class="records-navigation-divider"></div>
+        <div class="records-toolbar"><h2>{{ advancedMode ? '進階搜尋結果' : '當月報告' }}</h2><span class="records-muted">{{ matches.length }} 份</span></div>
+        <input v-model="keyword" class="records-input" type="search" placeholder="搜尋報告名稱…" aria-label="搜尋報告名稱" />
+        <p v-if="loadingList" class="records-muted">正在載入報告清單…</p>
+        <p v-else-if="!matches.length" class="records-muted">{{ monthHasReports && keyword ? '沒有符合名稱的報告。' : '這段期間尚未儲存報告。' }}</p>
         <div v-else class="records-list">
-          <button v-for="item in matches" :key="item.id" type="button" :class="['records-list-row', { chosen: selected?.id === item.id }]" :disabled="loadingReport || saving" @click="openReport(item.id)">
+          <button v-for="item in matches" :key="item.id" type="button" :class="['records-list-row', { chosen: selected?.id === item.id }]" :disabled="loadingReport || saving || deleting" @click="openReport(item.id)">
             <span><strong>{{ item.title }}</strong><small>{{ fmtDate(item.start_date) }} ～ {{ fmtDate(item.end_date) }}</small></span>
-            <span class="records-list-date">{{ fmtTime(item.created_at) }}<span>檢視報告 ›</span></span>
+            <small class="records-list-date">{{ fmtTime(item.created_at) }}</small>
           </button>
         </div>
-        <p class="records-muted">顯示報告期間與搜尋區間有交集的最近 200 份報告。每次另存都會保留獨立版本。</p>
-      </template>
-      <p v-else-if="loadingList" class="records-muted">正在搜尋已儲存報告…</p>
-      <p v-else class="records-muted">請先選擇日期區間並按「搜尋報告」，才會顯示歷史報告。</p>
-    </section>
+        <p class="records-muted">顯示與 {{ advancedMode ? '進階搜尋區間' : '本月' }}重疊的最近 200 份報告，包含不同版本。</p>
+        <div class="records-navigation-divider"></div>
+        <button class="records-advanced-toggle" type="button" :aria-expanded="advancedOpen" @click="advancedOpen = !advancedOpen">進階搜尋 <span>{{ advancedOpen ? '⌃' : '⌄' }}</span></button>
+        <form v-if="advancedOpen" class="records-advanced-form" @submit.prevent="searchAdvanced">
+          <label class="records-field">開始日期<input v-model="startDate" type="date" class="records-input" /></label>
+          <label class="records-field">結束日期<input v-model="endDate" type="date" class="records-input" /></label>
+          <button type="submit" class="records-search-button" :disabled="loadingList || !startDate || !endDate || startDate > endDate">依日期區間搜尋</button>
+          <button v-if="advancedMode" type="button" class="records-reset-month" @click="reload(true);advancedMode=false">返回當月報告</button>
+        </form>
+      </aside>
+      <main class="records-reader" aria-label="已儲存工作報告預覽">
+        <section v-if="!selected && !loadingReport" class="records-panel records-reader-empty">
+          <div class="records-empty-icon" aria-hidden="true">▤</div>
+          <h2>請選擇報告</h2>
+          <p>左側列出當月份已儲存的工作報告。點選其中一份後，即可在這裡查閱、編輯、刪除或匯出。</p>
+        </section>
     <p v-if="error" class="records-error" role="alert">{{ error }}</p>
     <p v-if="notice" class="records-success" role="status">{{ notice }}</p>
     <section v-if="loadingReport" class="records-panel records-muted">正在開啟已儲存報告…</section>
     <template v-if="selected && !loadingReport">
       <section class="records-panel">
         <div class="records-toolbar"><div><p class="eyebrow">SAVED SNAPSHOT</p><h2>{{ selected.title }}</h2><p class="records-muted">{{ fmtDate(selected.start_date) }} ～ {{ fmtDate(selected.end_date) }} · 儲存於 {{ fmtTime(selected.created_at) }}</p></div>
-          <div class="records-actions"><template v-if="!editing"><button type="button" :disabled="exportingWord" @click="openExport('pdf')">列印／另存 PDF</button><button type="button" :disabled="exportingWord" @click="openExport('word')">{{ exportingWord ? '匯出中…' : '下載 Word' }}</button><button type="button" class="primary" @click="edit">編輯此報告</button></template><template v-else><button type="button" @click="cancel">取消編輯</button><button type="button" class="primary" :disabled="saving" @click="saveNewVersion">{{ saving ? '儲存中…' : '另存新版本' }}</button></template></div>
+          <div class="records-actions"><template v-if="!editing"><button type="button" :disabled="exportingWord" @click="openExport('pdf')">列印／另存 PDF</button><button type="button" :disabled="exportingWord" @click="openExport('word')">{{ exportingWord ? '匯出中…' : '下載 Word' }}</button><button type="button" class="primary" @click="edit">編輯此報告</button><button type="button" class="records-delete-button" :disabled="deleting || saving || loadingReport || exporting" @click="requestDelete">刪除報告</button></template><template v-else><button type="button" @click="cancel">取消編輯</button><button type="button" class="primary" :disabled="saving" @click="saveNewVersion">{{ saving ? '儲存中…' : '另存新版本' }}</button></template></div>
         </div>
         <label v-if="editing" class="records-field">報告名稱<input v-model="draftTitle" maxlength="160" class="records-input" /></label>
         <div class="records-stats"><div><span>總工時</span><strong>{{ fmtHours(totalHours) }}</strong></div><div><span>一般工作</span><strong>{{ fmtHours(selected.stats?.workHours) }}</strong></div><div><span>加班</span><strong>{{ fmtHours(selected.stats?.overtimeHours) }}</strong></div><div><span>工作筆數</span><strong>{{ selected.stats?.recordCount ?? selected.details?.length ?? 0 }}</strong></div></div>
@@ -245,6 +358,16 @@ async function openReportAfterSave(id) {
       </section>
       <div v-if="editing" class="records-bottom-actions"><button type="button" @click="cancel">取消編輯</button><button type="button" class="primary" :disabled="saving" @click="saveNewVersion">{{ saving ? '儲存中…' : '另存新版本' }}</button></div>
     </template>
+      </main>
+    </div>
+    <div v-if="pendingDelete" class="records-delete-overlay" role="presentation" @click.self="cancelDelete">
+      <section role="alertdialog" aria-modal="true" aria-labelledby="records-delete-title" aria-describedby="records-delete-description" class="records-delete-dialog">
+        <div class="records-delete-heading"><span class="records-delete-icon" aria-hidden="true">!</span><div><p class="eyebrow">DELETE REPORT</p><h2 id="records-delete-title">確定刪除這份報告嗎？</h2></div></div>
+        <p id="records-delete-description" class="records-delete-description">即將刪除「{{ pendingDelete.title }}」（{{ fmtDate(pendingDelete.startDate) }} ～ {{ fmtDate(pendingDelete.endDate) }}）這一個儲存版本。</p>
+        <p class="records-delete-note">刪除後無法復原。其他歷史版本與原始工作紀錄不受影響。</p>
+        <div class="records-delete-actions"><button type="button" :disabled="deleting" @click="cancelDelete">取消</button><button type="button" class="danger" :disabled="deleting" @click="confirmDelete">{{ deleting ? '刪除中…' : '確認刪除' }}</button></div>
+      </section>
+    </div>
     <div v-if="exportDialog" class="records-export-overlay" role="presentation">
       <section role="dialog" aria-modal="true" aria-labelledby="records-export-title" class="records-export-dialog">
         <div class="records-export-header">
@@ -283,4 +406,51 @@ async function openReportAfterSave(id) {
 .records-export-quick{display:flex;flex-wrap:wrap;gap:8px}.records-export-quick button{padding:7px 12px;background:#f1f5fa;border:1px solid #dfe7f0;border-radius:8px;color:#364c68;cursor:pointer}
 .records-export-list{display:grid;gap:8px}.records-export-option{display:flex;gap:12px;align-items:center;padding:12px;border:1px solid #e0e8f1;border-radius:9px;font-size:14px;cursor:pointer}.records-export-option input{width:17px;height:17px;accent-color:#304d70}
 .records-export-actions{display:flex;justify-content:flex-end;gap:10px}.records-export-actions button{border:1px solid #d4deea;border-radius:9px;background:white;padding:10px 16px;cursor:pointer}.records-export-actions button.primary{background:#304d70;color:white;border-color:#304d70}.records-export-actions button:disabled{opacity:.45;cursor:not-allowed}
+</style>
+
+<style scoped>
+.records-toolbar button.records-delete-button{border-color:#eccaca;color:#a33b3b;background:#fff}
+.records-toolbar button.records-delete-button:hover:not(:disabled){background:#fff3f3;border-color:#dd9999}
+.records-delete-overlay{position:fixed;inset:0;z-index:1100;background:rgba(27,41,59,.47);display:flex;align-items:center;justify-content:center;padding:18px}
+.records-delete-dialog{width:min(100%,460px);background:#fff;border:1px solid #e1e8f0;border-radius:14px;padding:24px;box-shadow:0 16px 56px rgba(28,41,62,.19);display:grid;gap:17px}
+.records-delete-heading{display:flex;align-items:center;gap:12px}.records-delete-heading h2{font-size:19px;margin:0;color:#26374d}.records-delete-icon{height:34px;width:34px;border-radius:50%;background:#fff0f0;color:#b34444;display:grid;place-items:center;font-weight:700}
+.records-delete-description{font-size:14px;line-height:1.8;margin:0;overflow-wrap:anywhere}.records-delete-note{font-size:13px;color:#986060;background:#fff5f5;padding:12px;border-radius:8px;margin:0;line-height:1.6}
+.records-delete-actions{display:flex;justify-content:flex-end;gap:9px}.records-delete-actions button{border:1px solid #ccd7e5;background:#fff;padding:10px 17px;border-radius:9px;cursor:pointer;color:#33465f;font-size:13px}.records-delete-actions button.danger{background:#a33b3b;border-color:#a33b3b;color:#fff}.records-delete-actions button:disabled{opacity:.55;cursor:wait}
+</style>
+
+<style scoped>
+.records-columns{display:grid;grid-template-columns:minmax(265px,320px) minmax(0,1fr);gap:18px;align-items:start}
+.records-navigation{gap:14px;position:sticky;top:16px;max-height:calc(100vh - 32px);overflow-y:auto;align-content:start}
+.records-navigation .records-toolbar{align-items:center}
+.records-navigation .records-toolbar h2{font-size:16px}
+.records-navigation .records-toolbar button{padding:6px 10px;font-size:12px}
+.records-calendar-toolbar{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:2px 0 6px;font-size:14px}
+.records-calendar-toolbar button{display:grid;place-items:center;border:1px solid #e0e8f0;background:#fff;border-radius:8px;color:#354e6c;font-size:24px;width:32px;height:32px;cursor:pointer}
+.records-calendar-toolbar button:hover{background:#f2f6fb}
+.records-calendar-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:2px}
+.records-calendar-weekday{text-align:center;font-size:11px;color:#8492a5;padding:8px 0}
+.records-calendar-cell{min-height:34px;display:grid;place-items:center;position:relative;border-radius:5px}
+.records-calendar-day{display:grid;place-items:center;font-size:12px;width:27px;height:27px;border-radius:50%;position:relative;z-index:1}
+.records-calendar-cell.is-selected-range{background:#e9f0f9;border-radius:2px}
+.records-calendar-cell.is-range-start{border-radius:13px 2px 2px 13px}
+.records-calendar-cell.is-range-end{border-radius:2px 13px 13px 2px}
+.records-calendar-cell.is-selected-range .records-calendar-day{color:#28496f;font-weight:650}
+.records-calendar-cell.is-today .records-calendar-day{border:1px solid #718cab;color:#254668;font-weight:750}
+.records-calendar-cell.is-range-start .records-calendar-day,.records-calendar-cell.is-range-end .records-calendar-day{background:#4d719c;color:#fff}
+.records-calendar-help{line-height:1.75}
+.records-navigation-divider{height:1px;background:#e8edf4}
+.records-navigation .records-list{max-height:340px;overflow:auto;gap:7px}
+.records-navigation .records-list-row{padding:11px 12px;display:grid;gap:7px}
+.records-navigation .records-list-row strong{font-size:13px;line-height:1.5}
+.records-navigation .records-list-date{text-align:left}
+.records-advanced-toggle{display:flex;justify-content:space-between;align-items:center;border:0;background:transparent;padding:4px 0;color:#334f72;font-weight:650;font-size:13px;cursor:pointer}
+.records-advanced-form{display:grid;gap:10px}
+.records-reset-month{border:1px solid #d4deea;border-radius:8px;padding:10px;background:#fff;cursor:pointer;color:#455b74}
+.records-reader{min-width:0;display:grid;gap:18px}
+.records-reader-empty{min-height:340px;align-content:center;justify-items:center;text-align:center;color:#61748b}
+.records-reader-empty h2{font-size:20px;color:#2f445f;margin:0}
+.records-reader-empty p{font-size:13px;line-height:1.8;max-width:380px;margin:0}
+.records-empty-icon{width:54px;height:54px;border-radius:15px;display:grid;place-items:center;background:#edf3f9;color:#6582a5;font-size:32px}
+@media(max-width:1050px){.records-columns{grid-template-columns:minmax(240px,285px) minmax(0,1fr)}.records-navigation{position:static;max-height:none}}
+@media(max-width:760px){.records-columns{grid-template-columns:minmax(0,1fr)}.records-navigation .records-list{max-height:250px}.records-reader-empty{min-height:230px}}
 </style>
