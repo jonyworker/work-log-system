@@ -1,11 +1,43 @@
 <script setup>
 import { computed, ref } from 'vue'
 import { getSavedWorkReport, listSavedWorkReportsByRange, saveWorkReportSnapshot } from '../api/reportSnapshotApi'
+import { printSavedReport, downloadSavedReportDocx, EXPORT_SECTIONS } from '../api/reportExport'
 
 const allReports = ref([])
 const loadingList = ref(false)
 const loadingReport = ref(false)
 const saving = ref(false)
+const exportingWord = ref(false)
+const exportDialog = ref(false)
+const exportType = ref('pdf')
+const selectedSections = ref(EXPORT_SECTIONS.map(s => s.key))
+const exporting = computed(() => exportingWord.value)
+function openExport(type) {
+  if (!selected.value || editing.value || exporting.value) return
+  exportType.value = type
+  selectedSections.value = EXPORT_SECTIONS.map(s => s.key)
+  exportDialog.value = true
+  error.value = ''
+}
+function toggleSection(key) {
+  selectedSections.value = selectedSections.value.includes(key)
+    ? selectedSections.value.filter(x => x !== key)
+    : EXPORT_SECTIONS.map(s => s.key).filter(x => selectedSections.value.includes(x) || x === key)
+}
+function chooseAll() { selectedSections.value = EXPORT_SECTIONS.map(s => s.key) }
+function chooseSummaryOnly() { selectedSections.value = ['summary'] }
+async function confirmExport() {
+  if (!selected.value || !selectedSections.value.length || exporting.value) return
+  const sections = [...selectedSections.value]
+  if (exportType.value === 'pdf') {
+    exportPdf(sections)
+    exportDialog.value = false
+  } else {
+    await exportWord(sections)
+    if (!error.value) exportDialog.value = false
+  }
+}
+
 const error = ref('')
 const notice = ref('')
 const keyword = ref('')
@@ -45,6 +77,7 @@ function clearResults() {
   searchedPeriod.value = null
   allReports.value = []
   selected.value = null
+  exportDialog.value = false
   editing.value = false
   draft.value = null
   notice.value = ''
@@ -64,6 +97,7 @@ async function reload() {
   error.value = ''
   notice.value = ''
   selected.value = null
+  exportDialog.value = false
   editing.value = false
   allReports.value = []
   searchedPeriod.value = null
@@ -97,6 +131,20 @@ async function openReport(id) {
     expandedCategories.value = false
   } catch (err) { if (seq === loadSeq) error.value = err?.message || '開啟報告失敗。' }
   finally { if (seq === loadSeq) loadingReport.value = false }
+}
+function exportPdf(sections) {
+  if (!selected.value || editing.value) return
+  error.value = ''
+  try { printSavedReport(selected.value, sections) }
+  catch (err) { error.value = err?.message || '無法開啟列印視窗。' }
+}
+async function exportWord(sections) {
+  if (!selected.value || editing.value || exportingWord.value) return
+  error.value = ''
+  exportingWord.value = true
+  try { await downloadSavedReportDocx(selected.value, sections) }
+  catch (err) { error.value = err?.message || 'Word 匯出失敗。' }
+  finally { exportingWord.value = false }
 }
 function edit() {
   if (!selected.value) return
@@ -177,11 +225,11 @@ async function openReportAfterSave(id) {
     <template v-if="selected && !loadingReport">
       <section class="records-panel">
         <div class="records-toolbar"><div><p class="eyebrow">SAVED SNAPSHOT</p><h2>{{ selected.title }}</h2><p class="records-muted">{{ fmtDate(selected.start_date) }} ～ {{ fmtDate(selected.end_date) }} · 儲存於 {{ fmtTime(selected.created_at) }}</p></div>
-          <div class="records-actions"><button v-if="!editing" type="button" class="primary" @click="edit">編輯此報告</button><template v-else><button type="button" @click="cancel">取消編輯</button><button type="button" class="primary" :disabled="saving" @click="saveNewVersion">{{ saving ? '儲存中…' : '另存新版本' }}</button></template></div>
+          <div class="records-actions"><template v-if="!editing"><button type="button" :disabled="exportingWord" @click="openExport('pdf')">列印／另存 PDF</button><button type="button" :disabled="exportingWord" @click="openExport('word')">{{ exportingWord ? '匯出中…' : '下載 Word' }}</button><button type="button" class="primary" @click="edit">編輯此報告</button></template><template v-else><button type="button" @click="cancel">取消編輯</button><button type="button" class="primary" :disabled="saving" @click="saveNewVersion">{{ saving ? '儲存中…' : '另存新版本' }}</button></template></div>
         </div>
         <label v-if="editing" class="records-field">報告名稱<input v-model="draftTitle" maxlength="160" class="records-input" /></label>
         <div class="records-stats"><div><span>總工時</span><strong>{{ fmtHours(totalHours) }}</strong></div><div><span>一般工作</span><strong>{{ fmtHours(selected.stats?.workHours) }}</strong></div><div><span>加班</span><strong>{{ fmtHours(selected.stats?.overtimeHours) }}</strong></div><div><span>工作筆數</span><strong>{{ selected.stats?.recordCount ?? selected.details?.length ?? 0 }}</strong></div></div>
-        <p class="records-muted">以上為儲存當下的工時快照，不因修改 AI 文字或原始工作紀錄而改變。</p>
+        <p class="records-muted">以上為儲存當下的工時快照，不因修改 AI 文字或原始工作紀錄而改變。匯出使用目前開啟的已儲存版本；如有編輯，請先另存新版本。</p>
       </section>
       <section v-if="report" class="records-panel records-report">
         <div class="records-toolbar"><div><p class="eyebrow">AI WORK SUMMARY</p><h2>工作成果摘要</h2></div><span class="records-muted">{{ selected.ai_model || 'AI 模型未記錄' }}</span></div>
@@ -197,9 +245,42 @@ async function openReportAfterSave(id) {
       </section>
       <div v-if="editing" class="records-bottom-actions"><button type="button" @click="cancel">取消編輯</button><button type="button" class="primary" :disabled="saving" @click="saveNewVersion">{{ saving ? '儲存中…' : '另存新版本' }}</button></div>
     </template>
+    <div v-if="exportDialog" class="records-export-overlay" role="presentation">
+      <section role="dialog" aria-modal="true" aria-labelledby="records-export-title" class="records-export-dialog">
+        <div class="records-export-header">
+          <div><p class="eyebrow">EXPORT SETTINGS</p><h2 id="records-export-title">選擇匯出內容</h2></div>
+          <button type="button" class="records-export-close" aria-label="關閉匯出選項" :disabled="exporting" @click="exportDialog = false">×</button>
+        </div>
+        <p class="records-muted">{{ exportType === 'pdf' ? 'PDF 列印／另存' : 'Word 文件' }} · {{ selected?.title }}</p>
+        <div class="records-export-quick">
+          <button type="button" @click="chooseAll">全部選取</button>
+          <button type="button" @click="chooseSummaryOnly">只選 AI 摘要</button>
+        </div>
+        <div class="records-export-list">
+          <label v-for="section in EXPORT_SECTIONS" :key="section.key" class="records-export-option">
+            <input type="checkbox" :checked="selectedSections.includes(section.key)" :disabled="exporting" @change="toggleSection(section.key)" />
+            <span>{{ section.label }}</span>
+          </label>
+        </div>
+        <p v-if="!selectedSections.length" class="records-error" role="alert">請至少選擇一個匯出區塊。</p>
+        <div class="records-export-actions">
+          <button type="button" :disabled="exporting" @click="exportDialog = false">取消</button>
+          <button type="button" class="primary" :disabled="!selectedSections.length || exporting" @click="confirmExport">{{ exporting ? '匯出中…' : exportType === 'pdf' ? '產生 PDF' : '下載 Word' }}</button>
+        </div>
+      </section>
+    </div>
   </div>
 </template>
 
 <style scoped>
 .records-page{display:grid;gap:20px;color:#243348;min-width:0}.records-header{padding:4px}.records-header h1{font-size:28px;margin:0 0 7px}.records-header p:not(.eyebrow){color:#607189;font-size:14px;margin:0}.eyebrow{font-size:11px;font-weight:700;letter-spacing:.09em;color:#657d9b;margin:0 0 6px}.records-panel{background:#fff;border:1px solid #e1e8f0;border-radius:14px;padding:22px;display:grid;gap:14px;min-width:0}.records-toolbar{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap}.records-toolbar h2{font-size:19px;margin:0}.records-search-form{display:flex;align-items:end;flex-wrap:wrap;gap:12px}.records-search-form .records-field{flex:1;min-width:180px}.records-search-button{border:0;background:#304d70;color:#fff;border-radius:9px;padding:11px 18px;min-height:41px;cursor:pointer;font-weight:650}.records-search-button:disabled{opacity:.5;cursor:not-allowed}.records-toolbar button,.records-bottom-actions button{border:1px solid #ccd7e5;background:white;border-radius:9px;padding:10px 15px;cursor:pointer;color:#33465f;font-size:13px}.records-toolbar button.primary,.records-bottom-actions button.primary{background:#304d70;border-color:#304d70;color:#fff}.records-toolbar button:disabled,.records-bottom-actions button:disabled{opacity:.5;cursor:wait}.records-actions,.records-bottom-actions{display:flex;gap:8px;flex-wrap:wrap}.records-bottom-actions{justify-content:flex-end}.records-input{box-sizing:border-box;width:100%;border:1px solid #d2ddea;border-radius:9px;padding:11px 12px;font:inherit;font-size:14px;min-height:41px;background:#fff;color:#243348}.records-field{display:grid;gap:7px;color:#586c83;font-weight:600;font-size:13px}.records-muted{font-size:12px;color:#71829a;margin:0}.records-error,.records-success{margin:0;padding:12px;border-radius:9px;font-size:13px}.records-error{color:#953b3b;background:#fff1f1}.records-success{color:#326552;background:#eaf6f0}.records-list{display:grid;gap:7px}.records-list-row{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;text-align:left;background:#fff;border:1px solid #e0e8f0;border-radius:9px;padding:12px 14px;cursor:pointer;color:#253750}.records-list-row:hover,.records-list-row.chosen{background:#f3f7fc;border-color:#bccbdf}.records-list-row:disabled{opacity:.6}.records-list-row>span{display:grid;gap:5px}.records-list-row small,.records-list-date{font-size:12px;color:#6c7e94}.records-list-date{text-align:right}.records-list-date span{font-size:11px;color:#4a6787}.records-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px}.records-stats>div{display:grid;gap:5px;background:#f5f7fa;padding:14px;border-radius:9px}.records-stats span{color:#718098;font-size:12px}.records-stats strong{font-size:22px}.records-report{gap:0}.records-section{padding:22px 0;border-top:1px solid #e6ebf1;display:grid;gap:12px}.records-section:first-of-type{border-top:0}.records-section h3{font-size:14px;margin:0;color:#364f6f}.records-section p,.records-entry p{font-size:14px;line-height:1.9;white-space:pre-wrap;margin:0}.records-entry{padding:0 0 12px;display:grid;gap:9px}.records-entry h4{font-size:14px;margin:0}.records-entry small{font-size:11px;color:#7a899d}.records-panel details{border-top:1px solid #e5ebf2;padding:14px 0}.records-panel details:first-child{border-top:0}.records-panel summary{cursor:pointer;font-size:15px;font-weight:650;display:flex;justify-content:space-between;gap:12px}.records-panel summary span{color:#7c8ba1;font-weight:400;font-size:12px}.records-stat-row{display:flex;justify-content:space-between;gap:10px;padding:10px 0;border-bottom:1px solid #f0f3f7;font-size:13px}.records-day{margin-top:18px}.records-day h4{margin:0 0 7px}.records-detail{padding:9px 0;border-bottom:1px solid #eef1f5}.records-detail span{font-size:11px;color:#73849b}.records-detail p{font-size:13px;line-height:1.8;white-space:pre-wrap}@media(max-width:650px){.records-panel{padding:16px}.records-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.records-list-row{align-items:flex-start;flex-direction:column}.records-list-date{text-align:left}}
+</style>
+
+<style scoped>
+.records-export-overlay{position:fixed;inset:0;z-index:1000;background:rgba(27,41,59,.45);display:flex;align-items:center;justify-content:center;padding:18px}
+.records-export-dialog{width:min(100%,480px);max-height:90vh;overflow:auto;background:white;border:1px solid #dbe4ed;border-radius:16px;padding:24px;box-shadow:0 16px 60px rgba(20,38,65,.2);display:grid;gap:16px}
+.records-export-header{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}.records-export-header h2{font-size:21px;margin:0}.records-export-close{border:0;background:none;font-size:28px;line-height:1;cursor:pointer;color:#687b94}
+.records-export-quick{display:flex;flex-wrap:wrap;gap:8px}.records-export-quick button{padding:7px 12px;background:#f1f5fa;border:1px solid #dfe7f0;border-radius:8px;color:#364c68;cursor:pointer}
+.records-export-list{display:grid;gap:8px}.records-export-option{display:flex;gap:12px;align-items:center;padding:12px;border:1px solid #e0e8f1;border-radius:9px;font-size:14px;cursor:pointer}.records-export-option input{width:17px;height:17px;accent-color:#304d70}
+.records-export-actions{display:flex;justify-content:flex-end;gap:10px}.records-export-actions button{border:1px solid #d4deea;border-radius:9px;background:white;padding:10px 16px;cursor:pointer}.records-export-actions button.primary{background:#304d70;color:white;border-color:#304d70}.records-export-actions button:disabled{opacity:.45;cursor:not-allowed}
 </style>
