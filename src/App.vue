@@ -17,6 +17,7 @@ import WeekView from './components/WeekView.vue'
 import MonthView from './components/MonthView.vue'
 import WorkHistoryView from './components/WorkHistoryView.vue'
 import ReportsView from './components/ReportsView.vue'
+import ReportRecordsView from './components/ReportRecordsView.vue'
 
 import { useCalendar } from './composables/useCalendar'
 import { useCategoryStore } from './stores/categoryStore'
@@ -435,6 +436,7 @@ onUnmounted(() => {
 
         <WorkHistoryView v-if="activePage === 'history'" @open-date="openHistoryDate" />
         <ReportsView v-if="activePage === 'reports'" />
+        <ReportRecordsView v-if="activePage === 'report-records'" />
         <section
           v-if="activePage === 'calendar'"
           class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5"

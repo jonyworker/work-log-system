@@ -60,6 +60,10 @@ function requestLogout() {
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M5 3h10l4 4v14H5z"/><path d="M15 3v5h4M8 16v-4M12 16V9M16 16v-3"/></svg>
         <span v-if="!collapsed">工作報告</span>
       </button>
+      <button type="button" class="wl-nav-item" :class="{ 'wl-nav-item--active': activePage === 'report-records' }" :aria-current="activePage === 'report-records' ? 'page' : undefined" :title="collapsed ? '報告紀錄' : undefined" @click="navigate('report-records')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><rect x="5" y="4" width="14" height="17" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>
+        <span v-if="!collapsed">報告紀錄</span>
+      </button>
     </nav>
 
     <div ref="accountArea" class="wl-sidebar-bottom">
