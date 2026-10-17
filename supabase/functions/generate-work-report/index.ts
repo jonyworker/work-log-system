@@ -1,4 +1,5 @@
-import { createClient } from 'npm:@supabase/supabase-js@2'
+import '@supabase/functions-js/edge-runtime.d.ts'
+import { createClient } from '@supabase/supabase-js'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -17,11 +18,11 @@ const validDate = (value: unknown): value is string =>
   new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value
 
 const projectOf = (content: string) => {
-  const match = content.match(/^\s*(?:\[([^\]]+)\]|【([^】]+)】)/)
+  const match = content.match(/^\s*(?:\[([\s\S]+?)\]|【([\s\S]+?)】)/)
   return (match?.[1] || match?.[2] || '').trim() || '未分類專案'
 }
 
-Deno.serve(async (req) => {
+Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: corsHeaders })
   if (req.method !== 'POST') return send({ error: '只接受 POST 請求' }, 405)
 
@@ -59,7 +60,23 @@ Deno.serve(async (req) => {
   if (!logs?.length) return send({ error: '此區間沒有工作紀錄' }, 422)
   if (logs.length > 500) return send({ error: '工作紀錄超過 500 筆，請縮小日期區間' }, 422)
 
-  const records = logs.map((log) => {
+  type WorkLogRow = {
+    date: string
+    type: string
+    hours: number | string | null
+    content: string | null
+    categories: { name: string } | { name: string }[] | null
+  }
+  type ReportRecord = {
+    date: string
+    project: string
+    category: string
+    type: string
+    hours: number
+    content: string
+  }
+
+  const records: ReportRecord[] = logs.map((log: WorkLogRow): ReportRecord => {
     const content = String(log.content || '').slice(0, 2000)
     const categoryRecord = log.categories as unknown as { name?: string } | { name?: string }[] | null
     const category = Array.isArray(categoryRecord) ? categoryRecord[0]?.name : categoryRecord?.name
@@ -72,7 +89,7 @@ Deno.serve(async (req) => {
       content,
     }
   })
-  const totalHours = records.reduce((sum, r) => sum + r.hours, 0)
+  const totalHours = records.reduce((sum: number, r: ReportRecord) => sum + r.hours, 0)
   const projects: Record<string, number> = {}
   for (const r of records) projects[r.project] = (projects[r.project] || 0) + r.hours
 
@@ -88,7 +105,7 @@ Deno.serve(async (req) => {
         store: false,
         reasoning: { effort: 'low' },
         max_output_tokens: 6500,
-        instructions: "你是協助台灣企業員工撰寫主管工作報告的專業編輯。採「B 標準版」，使用台灣繁體中文，精簡、具體、自然。請只根據提供的工作紀錄整理，不可將可能性當作事實。回傳必須完全符合指定 JSON schema，不輸出 Markdown 標題、項目符號或其他欄位。
+        instructions: `你是協助台灣企業員工撰寫主管工作報告的專業編輯。採「B 標準版」，使用台灣繁體中文，精簡、具體、自然。請只根據提供的工作紀錄整理，不可將可能性當作事實。回傳必須完全符合指定 JSON schema，不輸出 Markdown 標題、項目符號或其他欄位。
 
 【資料與分類】
 1. records 的 project 是從每筆工作紀錄開頭的 [專案名稱] 或【專案名稱】擷取，視為該筆工作所屬專案。專案名稱是分類依據，而非由語意自行改寫。
@@ -110,7 +127,7 @@ projectHighlights：以原始 project 分組，每個專案精簡 1～3 句整�
 decisions：僅保留重要且可追溯的會議決議、已確認安排或具影響的評估方向。對建議或討論必須明示「建議／討論中／評估中」，不得混稱已決議；沒有就回空陣列。
 followUps：優先列明確期限與尚待回覆、依賴、尚未完成事項；task 短且清晰，nextStep 寫具體下一步和原文可確認責任，dueDate 只有可確認的 YYYY-MM-DD 才填，其他填空字串。已完成的事項不列入；沒有就回空陣列。
 
-文字適合主管閱讀，避免同一句話在不同欄位重複，不虛構或省略關鍵的待追蹤期限。",
+文字適合主管閱讀，避免同一句話在不同欄位重複，不虛構或省略關鍵的待追蹤期限。`,
         text: { format: { type: 'json_schema', name: 'standard_work_report', strict: true, schema: {"type":"object","additionalProperties":false,"required":["overview","projectHighlights","decisions","followUps"],"properties":{"overview":{"type":"string"},"projectHighlights":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["project","result"],"properties":{"project":{"type":"string"},"result":{"type":"string"}}}},"decisions":{"type":"array","items":{"type":"string"}},"followUps":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["task","nextStep","dueDate"],"properties":{"task":{"type":"string"},"nextStep":{"type":"string"},"dueDate":{"type":"string"}}}}}} } },
         input: JSON.stringify({ period: { startDate, endDate }, totalHours, projects, records }),
       }),
